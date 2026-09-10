@@ -1,0 +1,31 @@
+{
+  "name": "classmcp",
+  "version": "0.1.0",
+  "description": "Local Google Classroom MCP server for students",
+  "type": "module",
+  "bin": {
+    "classmcp": "dist/cli.js"
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/cli.ts",
+    "start": "node dist/cli.js serve",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.0",
+    "googleapis": "^155.0.0",
+    "keytar": "^7.9.0",
+    "open": "^10.1.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.2.0"
+  }
+}
