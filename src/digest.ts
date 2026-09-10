@@ -1,5 +1,6 @@
 import type { classroom_v1 } from "googleapis";
 import type { GoogleServices } from "./google.js";
+import { withRetry } from "./google.js";
 
 export type DueItem = {
   course: string;
@@ -91,12 +92,12 @@ export async function listActiveCourses(services: GoogleServices): Promise<{ id:
   const courses: { id: string; name: string }[] = [];
   let pageToken: string | undefined;
   do {
-    const response = await services.classroom.courses.list({
+    const response = await withRetry("courses.list", () => services.classroom.courses.list({
       studentId: "me",
       courseStates: ["ACTIVE"],
       pageSize: 100,
       pageToken,
-    });
+    }));
     for (const c of response.data.courses ?? []) {
       if (c.id) courses.push({ id: c.id, name: c.name ?? "Unnamed" });
     }
@@ -117,18 +118,18 @@ export async function getWhatsDue(
 
   const perCourse = await mapPool(courses, 5, async (course) => {
     const [work, subs] = await Promise.all([
-      services.classroom.courses.courseWork.list({
+      withRetry(`courseWork.list ${course.id}`, () => services.classroom.courses.courseWork.list({
         courseId: course.id,
         courseWorkStates: ["PUBLISHED"],
         orderBy: "dueDate asc",
         pageSize: 100,
-      }),
-      services.classroom.courses.courseWork.studentSubmissions.list({
+      })),
+      withRetry(`submissions.list ${course.id}`, () => services.classroom.courses.courseWork.studentSubmissions.list({
         courseId: course.id,
         courseWorkId: "-",
         userId: "me",
         pageSize: 100,
-      }),
+      })),
     ]);
     const subByWork = new Map(
       (subs.data.studentSubmissions ?? []).map((s) => [s.courseWorkId ?? "", s]),
@@ -172,10 +173,10 @@ export async function getAssignmentStatus(
   maxDescChars = 300,
 ): Promise<StatusItem> {
   const [work, subs] = await Promise.all([
-    services.classroom.courses.courseWork.get({ courseId, id: assignmentId }),
-    services.classroom.courses.courseWork.studentSubmissions.list({
+    withRetry(`courseWork.get ${assignmentId}`, () => services.classroom.courses.courseWork.get({ courseId, id: assignmentId })),
+    withRetry(`submissions.get ${assignmentId}`, () => services.classroom.courses.courseWork.studentSubmissions.list({
       courseId, courseWorkId: assignmentId, userId: "me", pageSize: 1,
-    }),
+    })),
   ]);
   const w = work.data;
   const sub = subs.data.studentSubmissions?.[0];
@@ -209,12 +210,12 @@ export async function getWhatsNew(
 
   const perCourse = await mapPool(courses, 5, async (course) => {
     const [work, materials, announcements] = await Promise.all([
-      services.classroom.courses.courseWork.list({
+      withRetry(`courseWork.list ${course.id}`, () => services.classroom.courses.courseWork.list({
         courseId: course.id, courseWorkStates: ["PUBLISHED"],
         orderBy: "updateTime desc", pageSize: 20,
-      }),
-      services.classroom.courses.courseWorkMaterials.list({ courseId: course.id, pageSize: 20 }),
-      services.classroom.courses.announcements.list({ courseId: course.id, pageSize: 20 }),
+      })),
+      withRetry(`materials.list ${course.id}`, () => services.classroom.courses.courseWorkMaterials.list({ courseId: course.id, pageSize: 20 })),
+      withRetry(`announcements.list ${course.id}`, () => services.classroom.courses.announcements.list({ courseId: course.id, pageSize: 20 })),
     ]);
     const rows: NewsItem[] = [];
     for (const w of work.data.courseWork ?? []) {

@@ -21,7 +21,8 @@ Run the server manually with `npx -y classmcp@0.1.0 serve`.
 
 ## Tools
 
-Reads: `list_courses`, `list_assignments`, `get_assignment`, `list_materials`.
+Reads: `list_courses` (paged: pageSize 1-100, default 30; follow `nextCursor`),
+`list_assignments`, `get_assignment`, `list_materials`.
 
 Writes: `download_material` (destination must be absolute), `upload_local_file`
 (max 100 MB, returns the Drive file id), `attach_file_to_submission`
@@ -34,5 +35,15 @@ Digests (one call across all ACTIVE courses, prefer over per-course loops):
 `get_assignment`), `whats_new` (sinceDays 0-30, default 1; limit 1-100,
 default 30).
 
-Failed tool calls return `isError: true` with an actionable message instead of
-throwing.
+Every tool returns a short text summary plus typed `structuredContent`
+(validated against its `outputSchema`). Failed tool calls return `isError: true`
+with an actionable message instead of throwing. Google rate-limit (429) and
+server (5xx) errors are retried with backoff before failing.
+
+## Resources
+
+`classroom://courses/{courseId}` — JSON overview of one course with recent
+coursework. `classroom://courses/{courseId}/assignments/{assignmentId}` —
+compact assignment status (turn-in state, grade, materials). Both support
+`completion/complete`: type part of a course or assignment name to get matching
+IDs.

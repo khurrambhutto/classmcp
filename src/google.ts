@@ -7,6 +7,24 @@ import { loadCredentials, loadTokens, saveTokens } from "./store.js";
 
 export type GoogleServices = { auth: InstanceType<typeof google.auth.OAuth2>; classroom: classroom_v1.Classroom; drive: drive_v3.Drive };
 
+// Retry Google API calls that fail with rate-limit (429) or server (5xx) errors.
+// Waits grow exponentially with jitter so parallel fan-outs do not retry in lockstep.
+export async function withRetry<T>(label: string, fn: () => Promise<T>, retries = 3, baseDelayMs = 500): Promise<T> {
+  let delay = baseDelayMs;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      const status = (error as { code?: unknown })?.code;
+      const retryable = status === 429 || (typeof status === "number" && status >= 500);
+      if (!retryable || attempt >= retries) throw error;
+      process.stderr.write(`classmcp: ${label} failed (status ${String(status)}), retrying in ${Math.round(delay)}ms.\n`);
+      await new Promise((r) => setTimeout(r, delay + Math.random() * delay));
+      delay *= 2;
+    }
+  }
+}
+
 export function validateCredentials(contents: string): void {
   const credentials = JSON.parse(contents) as { installed?: OAuthClient; web?: OAuthClient };
   const client = credentials.installed ?? credentials.web;
