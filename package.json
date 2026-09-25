@@ -1,6 +1,6 @@
 {
   "name": "classmcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Local Google Classroom MCP server for students",
   "type": "module",
   "bin": {
@@ -8,7 +8,7 @@
   },
   "files": ["dist", "README.md", "LICENSE"],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
     "dev": "tsx src/cli.ts",
     "start": "node dist/cli.js serve",
     "test": "vitest run",

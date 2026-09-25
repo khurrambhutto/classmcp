@@ -1,6 +1,4 @@
-import fs from "node:fs/promises";
 import http from "node:http";
-import path from "node:path";
 import { google, classroom_v1, drive_v3 } from "googleapis";
 import { SCOPES } from "./config.js";
 import { loadCredentials, loadTokens, saveTokens } from "./store.js";
@@ -64,24 +62,6 @@ export async function authorize(credentialsJson: string, openBrowser: (url: stri
   });
   const { tokens } = await auth.getToken(code);
   await saveTokens(tokens);
-}
-
-export async function downloadFile(drive: drive_v3.Drive, fileId: string, destination: string): Promise<string> {
-  await fs.mkdir(path.dirname(destination), { recursive: true });
-  const result = await drive.files.get({ fileId, alt: "media" }, { responseType: "stream" });
-  const output = (await import("node:fs")).createWriteStream(destination);
-  try {
-    await new Promise<void>((resolve, reject) => {
-      result.data.on("error", reject);
-      output.on("error", reject);
-      output.on("finish", resolve);
-      result.data.pipe(output);
-    });
-  } catch (error) {
-    await fs.unlink(destination).catch(() => {});
-    throw error;
-  }
-  return destination;
 }
 
 type OAuthClient = { client_id: string; client_secret: string };

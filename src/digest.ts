@@ -1,43 +1,15 @@
 import type { classroom_v1 } from "googleapis";
 import type { GoogleServices } from "./google.js";
 import { withRetry } from "./google.js";
+import type {
+  Attachment, AssignmentDetail, CourseRow, NewRow, OverviewResult,
+  PartialError, RubricCriterion, SearchHit, SearchResult, WorkRow,
+} from "./schemas.js";
 
-export type DueItem = {
-  course: string;
-  courseId: string;
-  id: string;
-  title: string;
-  due: string;
-  daysLeft: number;
-  myState: string;
-  late: boolean;
-  points: number | null;
-};
+type HistoryEntry = NonNullable<AssignmentDetail["history"]>[number];
 
-export type StatusItem = {
-  courseId: string;
-  id: string;
-  title: string;
-  state: string | null;
-  workType: string | null;
-  due: string | null;
-  points: number | null;
-  myState: string;
-  late: boolean;
-  grade: number | null;
-  materials: string[];
-  description: string;
-  link: string | null;
-};
-
-export type NewsItem = {
-  type: "assignment" | "material" | "announcement";
-  course: string;
-  courseId: string;
-  id: string;
-  title: string;
-  updated: string | null;
-};
+export type OverviewOptions = { view?: "due" | "missing" | "new" | "grades" | "courses"; window?: number; limit?: number; query?: string | undefined; detail?: "concise" | "detailed" };
+export type SearchOptions = { query: string; courseId?: string | undefined; kinds?: Array<"assignment" | "material" | "announcement">; limit?: number; detail?: "concise" | "detailed" };
 
 export function dueToMillis(
   dueDate?: classroom_v1.Schema$Date | null,
@@ -80,177 +52,453 @@ export function summarizeMaterial(m: classroom_v1.Schema$Material): string {
 
 const DONE_STATES = new Set(["TURNED_IN", "RETURNED"]);
 
-async function mapPool<T, R>(items: T[], size: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+export async function mapPool<T, R>(items: T[], size: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const out: R[] = [];
-  for (let i = 0; i < items.length; i += size) {
-    out.push(...(await Promise.all(items.slice(i, i + size).map(fn))));
+  const width = Math.max(1, Math.floor(size));
+  for (let i = 0; i < items.length; i += width) {
+    out.push(...(await Promise.all(items.slice(i, i + width).map(fn))));
   }
   return out;
 }
 
-export async function listActiveCourses(services: GoogleServices): Promise<{ id: string; name: string }[]> {
-  const courses: { id: string; name: string }[] = [];
+export async function listCourses(services: GoogleServices, opts: { includeArchived?: boolean } = {}): Promise<CourseRow[]> {
+  const includeArchived = opts.includeArchived ?? true;
+  const courses: CourseRow[] = [];
   let pageToken: string | undefined;
   do {
     const response = await withRetry("courses.list", () => services.classroom.courses.list({
       studentId: "me",
-      courseStates: ["ACTIVE"],
+      courseStates: includeArchived ? ["ACTIVE", "ARCHIVED"] : ["ACTIVE"],
       pageSize: 100,
       pageToken,
     }));
     for (const c of response.data.courses ?? []) {
-      if (c.id) courses.push({ id: c.id, name: c.name ?? "Unnamed" });
+      if (c.id) courses.push({ id: c.id, name: c.name ?? "Unnamed", section: c.section ?? null, state: c.courseState ?? null });
     }
     pageToken = response.data.nextPageToken ?? undefined;
   } while (pageToken);
-  return courses;
+  return courses.sort(compareCourses);
 }
 
-export async function getWhatsDue(
-  services: GoogleServices,
-  opts: { daysAhead?: number; limit?: number; includeNoDueDate?: boolean; includeTurnedIn?: boolean } = {},
-  nowMillis = Date.now(),
-): Promise<{ checkedCourses: number; openCount: number; items: DueItem[] }> {
-  const daysAhead = opts.daysAhead ?? 14;
-  const limit = opts.limit ?? 50;
-  const courses = await listActiveCourses(services);
-  const cutoff = nowMillis + daysAhead * 86_400_000;
+function compareCourses(a: CourseRow, b: CourseRow): number {
+  const rank = (row: CourseRow) => (row.state === "ACTIVE" ? 0 : 1);
+  return rank(a) - rank(b) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
+}
 
-  const perCourse = await mapPool(courses, 5, async (course) => {
-    const [work, subs] = await Promise.all([
-      withRetry(`courseWork.list ${course.id}`, () => services.classroom.courses.courseWork.list({
-        courseId: course.id,
-        courseWorkStates: ["PUBLISHED"],
-        orderBy: "dueDate asc",
-        pageSize: 100,
-      })),
-      withRetry(`submissions.list ${course.id}`, () => services.classroom.courses.courseWork.studentSubmissions.list({
-        courseId: course.id,
-        courseWorkId: "-",
-        userId: "me",
-        pageSize: 100,
-      })),
-    ]);
-    const subByWork = new Map(
-      (subs.data.studentSubmissions ?? []).map((s) => [s.courseWorkId ?? "", s]),
-    );
-    const rows: DueItem[] = [];
-    for (const w of work.data.courseWork ?? []) {
-      if (!w.id) continue;
-      const sub = subByWork.get(w.id);
-      const myState = sub?.state ?? "NEW";
-      if (!opts.includeTurnedIn && DONE_STATES.has(myState)) continue;
-      const dueMillis = dueToMillis(w.dueDate, w.dueTime);
-      if (dueMillis === undefined) {
-        if (opts.includeNoDueDate) {
-          rows.push({
-            course: course.name, courseId: course.id, id: w.id,
-            title: w.title ?? "Untitled", due: "no due date", daysLeft: 0,
-            myState, late: sub?.late ?? false, points: w.maxPoints ?? null,
-          });
-        }
-        continue;
-      }
-      if (dueMillis > cutoff) continue;
-      rows.push({
-        course: course.name, courseId: course.id, id: w.id,
-        title: w.title ?? "Untitled", due: dueToDay(w.dueDate) ?? "no due date",
-        daysLeft: daysUntil(dueMillis, nowMillis),
-        myState, late: sub?.late ?? false, points: w.maxPoints ?? null,
-      });
+type Rec = Record<string, unknown>;
+
+function rec(value: unknown): Rec | null {
+  return value && typeof value === "object" ? (value as Rec) : null;
+}
+
+function str(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === "string" && value) return value;
+  }
+  return null;
+}
+
+// Accepts googleapis Material ({driveFile:{driveFile:…}, form, link, youtubeVideo})
+// OR Attachment ({driveFile:…, form, link, youTubeVideo}) — the two nest differently.
+export function normalizeAttachments(materials: Array<unknown>): Attachment[] {
+  const out: Attachment[] = [];
+  for (const raw of materials) {
+    const m = rec(raw);
+    if (!m) continue;
+    const drive = rec(rec(m.driveFile)?.driveFile) ?? rec(m.driveFile);
+    if (drive) {
+      out.push({ kind: "driveFile", id: str(drive.id), name: str(drive.title), url: null });
+      continue;
     }
-    return rows;
-  });
-
-  const items = perCourse.flat().sort((a, b) => a.daysLeft - b.daysLeft).slice(0, limit);
-  return { checkedCourses: courses.length, openCount: items.length, items };
+    const form = rec(m.form);
+    if (form) {
+      out.push({ kind: "form", id: null, name: str(form.title), url: str(form.formUrl, form.responderUri, form.alternateLink) });
+      continue;
+    }
+    const link = rec(m.link);
+    if (link) {
+      out.push({ kind: "link", id: null, name: str(link.title), url: str(link.url) });
+      continue;
+    }
+    const video = rec(rec(m.youtubeVideo)?.youtubeVideo) ?? rec(m.youtubeVideo)
+      ?? rec(rec(m.youTubeVideo)?.youtubeVideo) ?? rec(m.youTubeVideo);
+    if (video) {
+      const id = str(video.id);
+      out.push({
+        kind: "youtube", id, name: str(video.title),
+        url: str(video.alternateLink, id ? `https://www.youtube.com/watch?v=${id}` : null),
+      });
+      continue;
+    }
+  }
+  return out;
 }
 
-export async function getAssignmentStatus(
-  services: GoogleServices,
-  courseId: string,
-  assignmentId: string,
-  maxDescChars = 300,
-): Promise<StatusItem> {
+function workComparator(view: "due" | "missing" | "grades"): (a: WorkRow, b: WorkRow) => number {
+  if (view === "grades") {
+    return (a, b) => a.course.localeCompare(b.course) || a.title.localeCompare(b.title) || a.id.localeCompare(b.id);
+  }
+  if (view === "missing") {
+    return (a, b) => {
+      const da = a.daysLeft ?? Number.NEGATIVE_INFINITY;
+      const db = b.daysLeft ?? Number.NEGATIVE_INFINITY;
+      return db - da || a.title.localeCompare(b.title) || a.id.localeCompare(b.id);
+    };
+  }
+  return (a, b) => {
+    const da = a.daysLeft ?? Number.POSITIVE_INFINITY;
+    const db = b.daysLeft ?? Number.POSITIVE_INFINITY;
+    return da - db || a.title.localeCompare(b.title) || a.id.localeCompare(b.id);
+  };
+}
+
+export function buildWorkRows(course: { id: string; name: string }, work: unknown[], subs: unknown[], view: "due" | "missing" | "grades", window: number, nowMillis: number, detail: "concise" | "detailed"): WorkRow[] {
+  const subByWork = new Map<string, classroom_v1.Schema$StudentSubmission>();
+  for (const raw of subs) {
+    const sub = raw as classroom_v1.Schema$StudentSubmission;
+    if (sub?.courseWorkId) subByWork.set(sub.courseWorkId, sub);
+  }
+  const rows: WorkRow[] = [];
+  for (const raw of work) {
+    const w = raw as classroom_v1.Schema$CourseWork;
+    if (!w?.id) continue;
+    const sub = subByWork.get(w.id);
+    const myState = sub?.state ?? "NEW";
+    const late = sub?.late ?? false;
+    const grade = sub?.assignedGrade ?? null;
+    const dueMillis = dueToMillis(w.dueDate, w.dueTime);
+    const daysLeft = dueMillis !== undefined ? daysUntil(dueMillis, nowMillis) : null;
+    const open = !DONE_STATES.has(myState);
+    if (view === "due") {
+      if (!open) continue;
+      if (dueMillis !== undefined && ((daysLeft ?? 0) < 0 || (daysLeft ?? 0) > window)) continue;
+    } else if (view === "missing") {
+      if (!open) continue;
+      if (!(late || (dueMillis !== undefined && (daysLeft ?? 0) < 0))) continue;
+    } else if (grade === null) {
+      continue;
+    }
+    const row: WorkRow = {
+      course: course.name,
+      courseId: course.id,
+      id: w.id,
+      title: trimText(w.title, 140),
+      due: dueToDay(w.dueDate) ?? "none",
+      daysLeft,
+      myState,
+      late,
+      points: w.maxPoints ?? null,
+      grade,
+    };
+    if (detail === "detailed") {
+      row.link = w.alternateLink ?? undefined;
+      row.workType = w.workType ?? undefined;
+    }
+    rows.push(row);
+  }
+  return rows.sort(workComparator(view));
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function wrapOverview(view: OverviewResult["view"], window: number, checkedCourses: number, total: number, items: Array<WorkRow | NewRow | CourseRow>, errors: PartialError[], steer?: string): OverviewResult {
+  const returned = items.length;
+  const truncated = total > returned;
+  const parts: string[] = [];
+  if (truncated) parts.push(`Showing ${returned} of ${total}. Narrow with a smaller window, query="...", or a different view.`);
+  if (steer) parts.push(steer);
+  return {
+    view, window, checkedCourses, total, returned, truncated,
+    hint: parts.length > 0 ? parts.join(" ") : null,
+    errors,
+    items,
+  };
+}
+
+export async function getOverview(services: GoogleServices, opts: OverviewOptions = {}, nowMillis = Date.now()): Promise<OverviewResult> {
+  const view = opts.view ?? "due";
+  const window = opts.window ?? 7;
+  const limit = opts.limit ?? 20;
+  const detail = opts.detail ?? "concise";
+  const query = opts.query?.trim().toLowerCase() ?? "";
+  const errors: PartialError[] = [];
+
+  if (view === "courses") {
+    const courses = await listCourses(services, { includeArchived: true });
+    const matched = query ? courses.filter((c) => c.name.toLowerCase().includes(query)) : courses;
+    return wrapOverview(view, window, courses.length, matched.length, matched.slice(0, limit), errors);
+  }
+
+  if (view === "new") {
+    const courses = await listCourses(services, { includeArchived: false });
+    const since = nowMillis - window * 86_400_000;
+    const perCourse = await mapPool(courses, 5, async (course): Promise<NewRow[]> => {
+      try {
+        const [work, materials, announcements] = await Promise.all([
+          withRetry(`courseWork.list ${course.id}`, () => services.classroom.courses.courseWork.list({
+            courseId: course.id, courseWorkStates: ["PUBLISHED"], orderBy: "updateTime desc", pageSize: 20,
+          })),
+          withRetry(`courseWorkMaterials.list ${course.id}`, () => services.classroom.courses.courseWorkMaterials.list({ courseId: course.id, pageSize: 20 })),
+          withRetry(`announcements.list ${course.id}`, () => services.classroom.courses.announcements.list({ courseId: course.id, pageSize: 20 })),
+        ]);
+        const rows: NewRow[] = [];
+        const push = (type: NewRow["type"], id: string | null | undefined, title: string | null | undefined, updated: string | null | undefined) => {
+          if (!id || !updated || Date.parse(updated) < since) return;
+          rows.push({ type, course: course.name, courseId: course.id, id, title: trimText(title, 140), updated });
+        };
+        for (const w of work.data.courseWork ?? []) push("assignment", w.id, w.title, w.updateTime ?? w.creationTime);
+        for (const m of materials.data.courseWorkMaterial ?? []) push("material", m.id, m.title, m.updateTime ?? m.creationTime);
+        for (const a of announcements.data.announcements ?? []) push("announcement", a.id, a.text, a.updateTime ?? a.creationTime);
+        return rows;
+      } catch (error) {
+        errors.push({ courseId: course.id, course: course.name, message: errorMessage(error) });
+        return [];
+      }
+    });
+    const all = perCourse.flat().sort((a, b) => (Date.parse(b.updated ?? "") || 0) - (Date.parse(a.updated ?? "") || 0));
+    const matched = query ? all.filter((r) => r.title.toLowerCase().includes(query) || r.course.toLowerCase().includes(query)) : all;
+    if (errors.length > 0 && errors.length === courses.length && matched.length === 0) throw new Error(errors[0].message);
+    return wrapOverview(view, window, courses.length, matched.length, matched.slice(0, limit), errors);
+  }
+
+  const courses = await listCourses(services, { includeArchived: view === "grades" });
+  let missingCount = 0;
+  const perCourse = await mapPool(courses, 5, async (course): Promise<WorkRow[]> => {
+    try {
+      const [work, subs] = await Promise.all([
+        withRetry(`courseWork.list ${course.id}`, () => services.classroom.courses.courseWork.list({
+          courseId: course.id, courseWorkStates: ["PUBLISHED"], orderBy: "dueDate asc", pageSize: 100,
+        })),
+        withRetry(`submissions.list ${course.id}`, () => services.classroom.courses.courseWork.studentSubmissions.list({
+          courseId: course.id, courseWorkId: "-", userId: "me", pageSize: 100,
+        })),
+      ]);
+      const rows = buildWorkRows(course, work.data.courseWork ?? [], subs.data.studentSubmissions ?? [], view, window, nowMillis, detail);
+      if (view === "due") {
+        missingCount += buildWorkRows(course, work.data.courseWork ?? [], subs.data.studentSubmissions ?? [], "missing", window, nowMillis, detail).length;
+      }
+      return rows;
+    } catch (error) {
+      errors.push({ courseId: course.id, course: course.name, message: errorMessage(error) });
+      return [];
+    }
+  });
+  const all = perCourse.flat().sort(workComparator(view));
+  const matched = query ? all.filter((r) => r.title.toLowerCase().includes(query) || r.course.toLowerCase().includes(query)) : all;
+  if (errors.length > 0 && errors.length === courses.length && matched.length === 0) throw new Error(errors[0].message);
+  const steer = view === "due" && missingCount > 0
+    ? `${missingCount} overdue/late item(s) are in view=missing.`
+    : undefined;
+  return wrapOverview(view, window, courses.length, matched.length, matched.slice(0, limit), errors, steer);
+}
+
+function mapCriterion(c: classroom_v1.Schema$Criterion): RubricCriterion {
+  const levels = (c.levels ?? []).map((level) => ({
+    label: level.description ?? level.title ?? "",
+    points: level.points ?? null,
+  }));
+  const levelPoints = levels.map((level) => level.points).filter((p): p is number => p !== null);
+  return {
+    criterion: c.description ?? c.title ?? c.id ?? "",
+    points: levelPoints.length > 0 ? Math.max(...levelPoints) : null,
+    levels,
+  };
+}
+
+function mapHistory(history: classroom_v1.Schema$SubmissionHistory[] | null | undefined): HistoryEntry[] | null {
+  if (!history) return null;
+  const entries: HistoryEntry[] = [];
+  for (const entry of history) {
+    const state = entry?.stateHistory;
+    if (!state) continue;
+    entries.push({ state: state.state ?? "", at: state.stateTimestamp ?? null });
+  }
+  return entries.slice(-5);
+}
+
+export async function getAssignmentDetail(services: GoogleServices, courseId: string, courseName: string, assignmentId: string, maxDescChars = 400, nowMillis = Date.now()): Promise<AssignmentDetail> {
   const [work, subs] = await Promise.all([
     withRetry(`courseWork.get ${assignmentId}`, () => services.classroom.courses.courseWork.get({ courseId, id: assignmentId })),
-    withRetry(`submissions.get ${assignmentId}`, () => services.classroom.courses.courseWork.studentSubmissions.list({
+    withRetry(`studentSubmissions.list ${assignmentId}`, () => services.classroom.courses.courseWork.studentSubmissions.list({
       courseId, courseWorkId: assignmentId, userId: "me", pageSize: 1,
     })),
   ]);
   const w = work.data;
   const sub = subs.data.studentSubmissions?.[0];
+
+  let rubric: RubricCriterion[] | null = null;
+  try {
+    const response = await withRetry(`rubrics.list ${assignmentId}`, () => services.classroom.courses.courseWork.rubrics.list({ courseId, courseWorkId: assignmentId }));
+    const criteria = response.data.rubrics?.[0]?.criteria;
+    if (criteria) rubric = criteria.map(mapCriterion);
+  } catch {
+    rubric = null;
+  }
+
+  let topic: string | null = null;
+  const topicId = w.topicId;
+  if (topicId) {
+    try {
+      const response = await withRetry(`topics.get ${topicId}`, () => services.classroom.courses.topics.get({ courseId, id: topicId }));
+      topic = response.data.name ?? null;
+    } catch {
+      topic = null;
+    }
+  }
+
+  const dueMillis = dueToMillis(w.dueDate, w.dueTime);
   return {
     courseId,
+    course: courseName,
     id: assignmentId,
-    title: w.title ?? "Untitled",
-    state: w.state ?? null,
+    title: trimText(w.title, 200),
     workType: w.workType ?? null,
+    prompt: trimText(w.description, maxDescChars),
     due: dueToDay(w.dueDate),
+    daysLeft: dueMillis !== undefined ? daysUntil(dueMillis, nowMillis) : null,
     points: w.maxPoints ?? null,
     myState: sub?.state ?? "NEW",
     late: sub?.late ?? false,
     grade: sub?.assignedGrade ?? null,
-    materials: (w.materials ?? []).map(summarizeMaterial),
-    description: trimText(w.description, maxDescChars),
     link: w.alternateLink ?? null,
+    topic,
+    rubric,
+    attachments: normalizeAttachments(w.materials ?? []),
+    myAttachments: normalizeAttachments(sub?.assignmentSubmission?.attachments ?? []),
+    history: mapHistory(sub?.submissionHistory),
   };
 }
 
-export async function getWhatsNew(
-  services: GoogleServices,
-  opts: { sinceDays?: number; limit?: number } = {},
-  nowMillis = Date.now(),
-): Promise<{ since: string; count: number; items: NewsItem[] }> {
-  const sinceDays = opts.sinceDays ?? 1;
-  const limit = opts.limit ?? 30;
-  const since = nowMillis - sinceDays * 86_400_000;
-  const sinceIso = new Date(since).toISOString();
-  const courses = await listActiveCourses(services);
+function matchesTokens(haystack: string, tokens: string[]): boolean {
+  if (tokens.length === 0) return false;
+  const lower = haystack.toLowerCase();
+  return tokens.every((token) => lower.includes(token));
+}
 
-  const perCourse = await mapPool(courses, 5, async (course) => {
-    const [work, materials, announcements] = await Promise.all([
-      withRetry(`courseWork.list ${course.id}`, () => services.classroom.courses.courseWork.list({
-        courseId: course.id, courseWorkStates: ["PUBLISHED"],
-        orderBy: "updateTime desc", pageSize: 20,
-      })),
-      withRetry(`materials.list ${course.id}`, () => services.classroom.courses.courseWorkMaterials.list({ courseId: course.id, pageSize: 20 })),
-      withRetry(`announcements.list ${course.id}`, () => services.classroom.courses.announcements.list({ courseId: course.id, pageSize: 20 })),
-    ]);
-    const rows: NewsItem[] = [];
-    for (const w of work.data.courseWork ?? []) {
-      const updated = w.updateTime ?? w.creationTime ?? null;
-      if (!updated || Date.parse(updated) < since) continue;
-      if (!w.id) continue;
-      rows.push({
-        type: "assignment", course: course.name, courseId: course.id, id: w.id,
-        title: trimText(w.title, 140), updated,
-      });
+function makeSnippet(body: string | null | undefined, tokens: string[]): string | null {
+  const collapsed = (body ?? "").trim().replace(/\s+/g, " ");
+  if (!collapsed) return null;
+  const lower = collapsed.toLowerCase();
+  let index = -1;
+  for (const token of tokens) {
+    const at = lower.indexOf(token);
+    if (at !== -1 && (index === -1 || at < index)) index = at;
+  }
+  if (index === -1) return null;
+  return trimText(collapsed.slice(Math.max(0, index - 60), index + 80), 140);
+}
+
+export async function searchEverything(services: GoogleServices, opts: SearchOptions, nowMillis = Date.now()): Promise<SearchResult> {
+  const kinds = new Set(opts.kinds ?? ["assignment", "material", "announcement"]);
+  const limit = opts.limit ?? 10;
+  const detail = opts.detail ?? "concise";
+  const tokens = opts.query.toLowerCase().split(/\s+/).filter(Boolean);
+  const errors: PartialError[] = [];
+
+  let courses: CourseRow[];
+  if (opts.courseId) {
+    const all = await listCourses(services, { includeArchived: true });
+    courses = all.filter((c) => c.id === opts.courseId);
+    if (courses.length === 0) {
+      return {
+        query: opts.query, checkedCourses: 0, total: 0, returned: 0, truncated: false, hint: null,
+        errors: [{ courseId: opts.courseId, course: null, message: `No course with id "${opts.courseId}".` }],
+        hits: [],
+      };
     }
-    for (const m of materials.data.courseWorkMaterial ?? []) {
-      const updated = m.updateTime ?? m.creationTime ?? null;
-      if (!updated || Date.parse(updated) < since) continue;
-      if (!m.id) continue;
-      rows.push({
-        type: "material", course: course.name, courseId: course.id, id: m.id,
-        title: trimText(m.title, 140), updated,
-      });
+  } else {
+    courses = await listCourses(services, { includeArchived: false });
+  }
+
+  const perCourse = await mapPool(courses, 5, async (course): Promise<SearchHit[]> => {
+    try {
+      const [work, materials, announcements, subs] = await Promise.all([
+        withRetry(`courseWork.list ${course.id}`, () => services.classroom.courses.courseWork.list({
+          courseId: course.id, courseWorkStates: ["PUBLISHED"], orderBy: "updateTime desc", pageSize: 100,
+        })),
+        withRetry(`courseWorkMaterials.list ${course.id}`, () => services.classroom.courses.courseWorkMaterials.list({ courseId: course.id, pageSize: 50 })),
+        withRetry(`announcements.list ${course.id}`, () => services.classroom.courses.announcements.list({ courseId: course.id, pageSize: 50 })),
+        withRetry(`studentSubmissions.list ${course.id}`, () => services.classroom.courses.courseWork.studentSubmissions.list({
+          courseId: course.id, courseWorkId: "-", userId: "me", pageSize: 100,
+        })),
+      ]);
+      const subByWork = new Map(
+        (subs.data.studentSubmissions ?? []).map((s) => [s.courseWorkId ?? "", s]),
+      );
+      const hits: SearchHit[] = [];
+      if (kinds.has("assignment")) {
+        for (const w of work.data.courseWork ?? []) {
+          if (!w.id) continue;
+          const body = w.description ?? "";
+          if (!matchesTokens(`${w.title ?? ""} ${body}`, tokens)) continue;
+          const sub = subByWork.get(w.id);
+          const dueMillis = dueToMillis(w.dueDate, w.dueTime);
+          const hit: SearchHit = {
+            kind: "assignment", course: course.name, courseId: course.id, id: w.id,
+            title: trimText(w.title, 140),
+            due: dueToDay(w.dueDate),
+            daysLeft: dueMillis !== undefined ? daysUntil(dueMillis, nowMillis) : null,
+            myState: sub?.state ?? "NEW",
+            snippet: makeSnippet(body, tokens),
+            updated: w.updateTime ?? w.creationTime ?? null,
+          };
+          if (detail === "detailed") hit.link = w.alternateLink ?? undefined;
+          hits.push(hit);
+        }
+      }
+      if (kinds.has("material")) {
+        for (const m of materials.data.courseWorkMaterial ?? []) {
+          if (!m.id) continue;
+          const body = m.description ?? "";
+          if (!matchesTokens(`${m.title ?? ""} ${body}`, tokens)) continue;
+          const hit: SearchHit = {
+            kind: "material", course: course.name, courseId: course.id, id: m.id,
+            title: trimText(m.title, 140),
+            due: null, daysLeft: null, myState: null,
+            snippet: makeSnippet(body, tokens),
+            updated: m.updateTime ?? m.creationTime ?? null,
+          };
+          if (detail === "detailed") hit.link = m.alternateLink ?? undefined;
+          hits.push(hit);
+        }
+      }
+      if (kinds.has("announcement")) {
+        for (const a of announcements.data.announcements ?? []) {
+          if (!a.id) continue;
+          const body = a.text ?? "";
+          if (!matchesTokens(body, tokens)) continue;
+          const hit: SearchHit = {
+            kind: "announcement", course: course.name, courseId: course.id, id: a.id,
+            title: trimText(a.text, 140),
+            due: null, daysLeft: null, myState: null,
+            snippet: makeSnippet(body, tokens),
+            updated: a.updateTime ?? a.creationTime ?? null,
+          };
+          if (detail === "detailed") hit.link = a.alternateLink ?? undefined;
+          hits.push(hit);
+        }
+      }
+      return hits;
+    } catch (error) {
+      errors.push({ courseId: course.id, course: course.name, message: errorMessage(error) });
+      return [];
     }
-    for (const a of announcements.data.announcements ?? []) {
-      const updated = a.updateTime ?? a.creationTime ?? null;
-      if (!updated || Date.parse(updated) < since) continue;
-      if (!a.id) continue;
-      rows.push({
-        type: "announcement", course: course.name, courseId: course.id, id: a.id,
-        title: trimText(a.text, 140), updated,
-      });
-    }
-    return rows;
   });
 
-  const items = perCourse
-    .flat()
-    .sort((a, b) => Date.parse(b.updated ?? "") - Date.parse(a.updated ?? ""))
-    .slice(0, limit);
-  return { since: sinceIso, count: items.length, items };
+  const all = perCourse.flat().sort((a, b) => (Date.parse(b.updated ?? "") || 0) - (Date.parse(a.updated ?? "") || 0));
+  const total = all.length;
+  const hits = all.slice(0, limit);
+  const truncated = total > hits.length;
+  return {
+    query: opts.query,
+    checkedCourses: courses.length,
+    total,
+    returned: hits.length,
+    truncated,
+    hint: truncated ? `Showing ${hits.length} of ${total}. Add a course filter or more specific keywords.` : null,
+    errors,
+    hits,
+  };
 }

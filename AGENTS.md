@@ -4,6 +4,12 @@ Local Google Classroom MCP server. TypeScript, Node >= 20.
 
 Run `npm run build`, `npm run typecheck`, `npm run test` before finishing.
 
+Tool surface (5 tools): `get_overview`, `get_assignment`, `search`, `download_files`, `submit_work`.
+
+Keep `runServer` lazy: connect first, load Google per tool call via the cached `getServices()` factory (see Solved issues).
+
+Call ClassMCP tools inside the `execute` code runtime with bracket notation, e.g. `tools.classmcp["get_overview"]({})` (see Solved issues).
+
 ## Solved issues
 
 ### OpenCode shows classmcp as failed / timed out
@@ -20,4 +26,8 @@ Fix in `src/server.ts`: connect first, load Google lazily per tool call with a c
 
 ### Calling classmcp tools from an agent
 
-Call ClassMCP tools inside the `execute` code runtime with bracket notation. `tools.classmcp.list_courses({})` fails with unknown tool. Use `tools.classmcp["list_courses"]({})`.
+Call ClassMCP tools inside the `execute` code runtime with bracket notation. `tools.classmcp.get_overview({})` fails with unknown tool. Use `tools.classmcp["get_overview"]({})`.
+
+### Submission writes are project-restricted
+
+Submission writes (attach/turn-in/reclaim) are 403 @ProjectPermissionDenied for any third-party OAuth project on teacher-created coursework (verified live 2026-09) — do not attempt to "fix" turn_in; submit_work is intentionally best-effort.

@@ -5,8 +5,11 @@ Docs index: https://modelcontextprotocol.io/llms.txt
 Goal: make classmcp the most efficient, universal, spec-correct local Classroom server.
 
 Classmcp today: TypeScript + `@modelcontextprotocol/sdk@^1.17.0` + zod, stdio transport,
-11 tools in `src/server.ts`, aggregate helpers in `src/digest.ts`. No resources,
-prompts, completion, elicitation, tasks, pagination, or caching yet.
+5 tools (`get_overview`, `get_assignment`, `search`, `download_files`, `submit_work`) in
+`src/server.ts`, aggregate helpers in `src/digest.ts`. Implemented: resources
+(`classroom://…`), `completion/complete`, pagination, `outputSchema` +
+`structuredContent` on every tool. Not implemented: prompts, tasks, `ttlMs`/caching.
+Elicitation is deliberately deferred for host compatibility.
 
 ---
 
@@ -269,14 +272,21 @@ Don't duplicate the same data as both a tool and a resource — link them
 
 ## 13. classmcp gap list (prioritized)
 
-1. Descriptions state bounds/defaults inline (`whats_new`, `whats_due`, `assignment_status`).
-2. `outputSchema` + `structuredContent` on all 11 tools (keep text summary).
-3. Handler try/catch → `isError: true` actionable messages + 429/5xx retry/backoff.
-4. Confine `download_material`/`upload_local_file` paths to allow-listed dir.
-5. `turn_in_submission` → elicitation confirm; keep literal as fallback only.
-6. Add `resources` (course/assignment templates) + `completion` for `courseId`.
-7. Add `ttlMs`/`cacheScope` + `cursor`/`nextCursor` to list tools; `instructions` in discover.
-8. Fix `configureClients()`: OpenCode `mcp` key (not `mcpServers`), absolute node+dist path,
-   show-exact-command consent; document `env`.
-9. README: all 11 tools with limits; exclude `test-report-*.md` from npm files.
+1. DONE — descriptions state bounds/defaults inline (all five tools).
+2. DONE — `outputSchema` + `structuredContent` on all tools (keep text summary).
+3. DONE — handler try/catch → `isError: true` actionable messages + 429/5xx retry/backoff.
+4. Confine `submit_work` upload paths to the allow-listed dir (`download_files`
+   destination confinement is done).
+5. Literal `confirmTurnIn` is kept deliberately: host compatibility; elicitation
+   deferred (see §8).
+6. DONE — `resources` (course/assignment templates) + `completion` for `courseId`.
+7. Add `ttlMs`/`cacheScope` caching + `instructions` in discover (pagination is done).
+8. DONE — `configureClients()`: OpenCode `mcp` key (not `mcpServers`), absolute
+   node+dist path, show-exact-command consent; `env` documented in README.
+9. DONE — README: five tools with limits; `test-report-*.md` excluded from npm files.
 10. Tests: schema bounds, error envelope, traversal, digest helpers (already good).
+11. Submission mutations (`modifyAttachments`/`turnIn`/`reclaim`/`patch`) are 403
+    `@ProjectPermissionDenied` for third-party OAuth clients on teacher-created
+    coursework — verified live 2026-09-24. The five-tool surface reflects this:
+    `submit_work` = upload + best-effort + UI links; no detach/unsubmit tools
+    because the API has no `removeAttachments` and `reclaim` is blocked.
