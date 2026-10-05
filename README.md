@@ -154,13 +154,13 @@ an explicit Node path, and `setup` never writes a transient `npx` cache path.
 
 <!-- Tested versions are recorded in CHANGELOG.md. -->
 
-| Host | Where | Tested |
+| Host | Where | Validated |
 | --- | --- | --- |
-| Codex CLI | `~/.codex/config.toml` or `codex mcp add` | 0.3.0 |
-| OpenCode | `~/.config/opencode/opencode.jsonc` | 0.3.0 |
-| Claude Code | `~/.claude.json` (or `claude mcp add`) | config shape only |
-| Cursor | `~/.cursor/mcp.json` | config shape only |
-| Antigravity | `~/.config/antigravity/mcp.json` | config shape only |
+| Codex CLI | `~/.codex/config.toml` or `codex mcp add` | registered, listed, and inspected via an isolated `CODEX_HOME` (0.3.0-rc.1) |
+| OpenCode | `~/.config/opencode/opencode.jsonc` | `opencode mcp list` → `classmcp connected` (0.3.0-rc.1) |
+| Claude Code | `~/.claude.json` (or `claude mcp add`) | config shape documented (CLI not available in the release environment) |
+| Cursor | `~/.cursor/mcp.json` | config shape documented |
+| Antigravity | `~/.config/antigravity/mcp.json` | config shape documented |
 
 **Codex** — preferred CLI registration:
 
