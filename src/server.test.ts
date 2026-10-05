@@ -63,6 +63,11 @@ function makeServices(overrides: { denyWrites?: boolean; uploadError?: Error; at
         list: vi.fn(async (params: { courseStates?: string[] }) => ({
           data: { courses: courses.filter((c) => (params.courseStates ?? []).includes(c.courseState)) },
         })),
+        get: vi.fn(async (params: { id: string }) => {
+          const found = courses.find((c) => c.id === params.id);
+          if (!found) throw new Error("Requested entity was not found.");
+          return { data: found };
+        }),
         courseWork: {
           list: vi.fn(async (params: { courseId: string }) => ({ data: { courseWork: work[params.courseId] ?? [] } })),
           get: vi.fn(async (params: { courseId: string; id: string }) => {

@@ -75,6 +75,7 @@ export const OverviewItemSchema = z.union([WorkRowSchema, NewRowSchema, CourseRo
 export const PartialErrorSchema = z.object({
   courseId: z.string().nullable(),
   course: z.string().nullable(),
+  operation: z.string().optional().describe("Google endpoint or step that failed, e.g. courseWork.list."),
   message: z.string(),
 });
 
@@ -85,9 +86,10 @@ export const OverviewResultSchema = z.object({
   skippedArchived: z.number().describe("Non-ACTIVE courses not scanned (0 when included)."),
   total: z.number().describe("Matches after query filtering, before limit."),
   returned: z.number(),
-  truncated: z.boolean(),
+  truncated: z.boolean().describe("True when the result limit cut matches; narrow the query."),
+  scanTruncated: z.boolean().describe("True when an internal scan budget stopped pagination early; some older items were not seen."),
   hint: z.string().nullable().describe("How to narrow or where to look next; null when there is nothing to add."),
-  errors: z.array(PartialErrorSchema).describe("Per-course failures; the rest of the result is still valid."),
+  errors: z.array(PartialErrorSchema).describe("Per-course/per-endpoint failures; the rest of the result is still valid."),
   items: z.array(OverviewItemSchema),
 });
 
@@ -144,11 +146,12 @@ export const SearchHitSchema = z.object({
 
 export const SearchResultSchema = z.object({
   query: z.string(),
-  checkedCourses: z.number(),
+  checkedCourses: z.number().describe("Courses actually scanned."),
   skippedArchived: z.number().describe("Non-ACTIVE courses not scanned (0 when included)."),
-  total: z.number(),
+  total: z.number().describe("Matches found across scanned courses (before limit)."),
   returned: z.number(),
-  truncated: z.boolean(),
+  truncated: z.boolean().describe("True when the result limit cut matches."),
+  scanTruncated: z.boolean().describe("True when an internal scan budget stopped pagination early; some older items were not scanned."),
   hint: z.string().nullable(),
   errors: z.array(PartialErrorSchema),
   hits: z.array(SearchHitSchema),
@@ -203,9 +206,9 @@ export const CourseDetailSchema = z.object({
   section: z.string().nullable(),
   state: z.string().nullable(),
   totals: z.object({
-    openWork: z.number(),
+    openWork: z.number().describe("Upcoming open work rows in this course (not truncated by the display cap)."),
     missing: z.number(),
-    materials: z.number(),
+    materials: z.number().describe("Total materials scanned, before the display cap."),
     announcements: z.number(),
   }),
   openWork: z.array(WorkRowSchema).describe("Upcoming open work in this course."),
@@ -214,7 +217,8 @@ export const CourseDetailSchema = z.object({
   announcements: z.array(AnnouncementSummarySchema).describe("Most recent 20 announcements."),
   topics: z.array(z.object({ id: z.string(), name: z.string() })).nullable().describe("Null unless topicsStatus is \"present\"/\"none\"."),
   topicsStatus: z.enum(["present", "none", "denied", "error"]),
-  truncated: z.boolean(),
+  truncated: z.boolean().describe("True when the 20-row display cap cut materials/announcements."),
+  scanTruncated: z.boolean().describe("True when an internal scan budget stopped pagination early."),
   hint: z.string().nullable(),
   errors: z.array(PartialErrorSchema),
 });
@@ -276,7 +280,7 @@ export const OverviewInputShape = {
   window: z.number().min(1).max(30).default(7).describe("Days: due horizon and new-since. 1-30, default 7."),
   limit: z.number().min(1).max(50).default(20).describe("Max rows returned. 1-50, default 20."),
   query: z.string().max(120).optional().describe("Case-insensitive filter on title/course name."),
-  includeArchived: z.boolean().default(false).describe("Also scan ARCHIVED courses (due/missing/new/grades default to ACTIVE only; the result reports skippedArchived)."),
+  includeArchived: z.boolean().default(false).describe("Also scan ARCHIVED courses for due/missing/new/grades. view=courses always lists every course. The result reports skippedArchived so narrowing is never silent."),
   detail: DetailShape,
 };
 
@@ -287,10 +291,10 @@ export const AssignmentInputShape = {
 };
 
 export const SearchInputShape = {
-  query: z.string().min(1).max(120).describe("Keywords matched against titles, descriptions, and announcement text."),
+  query: z.string().trim().min(1, "Search query must not be empty or whitespace only.").max(120).describe("Keywords matched against titles, descriptions, and announcement text. All words must match."),
   ...CourseRefShape,
-  kinds: z.array(z.enum(["assignment", "material", "announcement"])).max(3).optional()
-    .describe("Restrict kinds; default all three."),
+  kinds: z.array(z.enum(["assignment", "material", "announcement"])).min(1).max(3).optional()
+    .describe("Restrict kinds; default all three. At least one kind when provided."),
   includeArchived: z.boolean().default(false).describe("Also scan ARCHIVED courses (result reports skippedArchived)."),
   limit: z.number().min(1).max(30).default(10).describe("Max hits. 1-30, default 10."),
   detail: DetailShape,

@@ -9,6 +9,9 @@ import {
   getCourseDetail,
   searchEverything,
   listCourses,
+  listCourseWork,
+  listMaterials,
+  listAnnouncements,
 } from "./digest.js";
 import { resolveCourse, resolveAssignment, resolveMaterial, resolveAnnouncement, type CourseRef, type AssignmentRef, type MaterialRef, type AnnouncementRef } from "./resolve.js";
 import { downloadMany, uploadLocalFiles, type DownloadItem } from "./files.js";
@@ -178,27 +181,45 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
           const detail = await getAnnouncementDetail(services, courseRes.item.id, courseRes.item.name, annRes.item.id);
           pushAttachments(detail.attachments);
         } else {
+          // Fall back to materials/announcements so a material id or title passed
+          // as assignmentId/assignment still resolves (search returns all kinds).
+          // An exact assignmentId resolves without listing, so validate it with
+          // the detail GET before accepting it.
+          let resolved = false;
+          let workError: string | null = null;
           const workRes = await resolveAssignment(services, courseRes.item.id, { assignmentId, assignment } satisfies AssignmentRef);
           if (workRes.ok) {
-            const detail = await getAssignmentDetail(services, courseRes.item.id, courseRes.item.name, workRes.item.id, 0);
-            pushAttachments([...detail.attachments, ...detail.myAttachments]);
+            try {
+              const detail = await getAssignmentDetail(services, courseRes.item.id, courseRes.item.name, workRes.item.id, 0);
+              pushAttachments([...detail.attachments, ...detail.myAttachments]);
+              resolved = true;
+            } catch (error) {
+              workError = error instanceof Error ? error.message : String(error);
+            }
           } else {
-            // Fall back to materials/announcements so a material id or title passed
-            // as assignmentId/assignment still resolves (search returns all kinds).
+            workError = workRes.message;
+          }
+          if (!resolved) {
             const asMaterial = await resolveMaterial(services, courseRes.item.id, { materialId: assignmentId, material: assignment });
             if (asMaterial.ok) {
-              const detail = await getMaterialDetail(services, courseRes.item.id, courseRes.item.name, asMaterial.item.id);
-              pushAttachments(detail.attachments);
-            } else {
-              const asAnnouncement = await resolveAnnouncement(services, courseRes.item.id, { announcementId: assignmentId, announcement: assignment });
-              if (asAnnouncement.ok) {
-                const detail = await getAnnouncementDetail(services, courseRes.item.id, courseRes.item.name, asAnnouncement.item.id);
+              try {
+                const detail = await getMaterialDetail(services, courseRes.item.id, courseRes.item.name, asMaterial.item.id);
                 pushAttachments(detail.attachments);
-              } else {
-                return fail(new Error(workRes.message));
-              }
+                resolved = true;
+              } catch { /* fall through to announcements */ }
             }
           }
+          if (!resolved) {
+            const asAnnouncement = await resolveAnnouncement(services, courseRes.item.id, { announcementId: assignmentId, announcement: assignment });
+            if (asAnnouncement.ok) {
+              try {
+                const detail = await getAnnouncementDetail(services, courseRes.item.id, courseRes.item.name, asAnnouncement.item.id);
+                pushAttachments(detail.attachments);
+                resolved = true;
+              } catch { /* fall through to the error below */ }
+            }
+          }
+          if (!resolved) return fail(new Error(workError ?? "No assignment, material, or announcement matched."));
         }
       }
       let items: DownloadItem[];
@@ -333,16 +354,19 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
       } catch { /* state is best-effort */ }
 
       // The message is derived from final state only, so it can never claim an
-      // attachment or turn-in that did not happen.
-      const assignmentUrl = await assignmentLink(services, courseRes.item.id, work.id);
+      // attachment or turn-in that did not happen. The exact-id resolver may not
+      // know the title yet, so take it from the same GET that builds the link.
+      const linkInfo = await assignmentLink(services, courseRes.item.id, work.id);
+      const assignmentUrl = linkInfo.url;
+      const displayTitle = work.title || linkInfo.title || "the assignment";
       const parts: string[] = [];
       // Text-only hosts must see the concrete failure detail, not just warnings[].
       for (const warning of warnings) {
         if (/^(Upload failed|Attach failed|Turn-in failed)/.test(warning)) parts.push(warning);
       }
       if (requestedFiles.length > 0) parts.push(`Uploaded ${uploadsSucceeded.length}/${requestedFiles.length} file(s) to Drive.`);
-      if (attached) parts.push(`Attached ${attachedCount} item(s) to ${work.title}.`);
-      if (turnedIn) parts.push(`Turned in ${work.title}.`);
+      if (attached) parts.push(`Attached ${attachedCount} item(s) to ${displayTitle}.`);
+      if (turnedIn) parts.push(`Turned in ${displayTitle}.`);
       if (turnInSkippedReason) parts.push(`Skipped turn-in because ${turnInSkippedReason}.`);
       if (blocked) {
         parts.push("Google blocked the change: only the app that created this assignment may modify submissions.");
@@ -359,7 +383,7 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
       return ok({
         courseId: courseRes.item.id,
         assignmentId: work.id,
-        title: work.title,
+        title: displayTitle,
         assignmentLink: assignmentUrl,
         uploaded,
         uploadsRequested: requestedFiles.length,
@@ -384,7 +408,7 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
   server.resource("course", new ResourceTemplate("classroom://courses/{courseId}", {
     list: async () => {
       const services = await getServices();
-      const courses = await listCourses(services, { includeArchived: true });
+      const { items: courses } = await listCourses(services, { includeArchived: true });
       return {
         resources: courses.map((c) => ({
           uri: `classroom://courses/${c.id}`,
@@ -396,7 +420,7 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
     complete: {
       courseId: async (value) => {
         const services = await getServices();
-        const courses = await listCourses(services, { includeArchived: true });
+        const { items: courses } = await listCourses(services, { includeArchived: true });
         const q = value.trim().toLowerCase();
         if (!q) return courses.map((c) => c.id).slice(0, 100);
         return courses
@@ -428,11 +452,9 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
         const courseId = context?.arguments?.courseId;
         if (!courseId) return [];
         const services = await getServices();
-        const response = await withRetry(`courseWork.list ${courseId}`, () => services.classroom.courses.courseWork.list({
-          courseId, courseWorkStates: ["PUBLISHED"], orderBy: "updateTime desc", pageSize: 100,
-        }));
+        const { items } = await listCourseWork(services, courseId, { orderBy: "updateTime desc" });
         const q = value.trim().toLowerCase();
-        return (response.data.courseWork ?? [])
+        return items
           .filter((w) => !q || (w.title ?? "").toLowerCase().includes(q))
           .map((w) => w.id ?? "")
           .filter(Boolean)
@@ -449,7 +471,7 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
       const assignmentId = String(variables.assignmentId ?? "");
       if (!courseId || !assignmentId) throw new Error("courseId and assignmentId are required.");
       const services = await getServices();
-      const courses = await listCourses(services, { includeArchived: true });
+      const { items: courses } = await listCourses(services, { includeArchived: true });
       const status = await getAssignmentDetail(services, courseId, courses.find((c) => c.id === courseId)?.name ?? courseId, assignmentId, 1000);
       return { contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(status, null, 2) }] };
     } catch (error) {
@@ -464,9 +486,9 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
         const courseId = context?.arguments?.courseId;
         if (!courseId) return [];
         const services = await getServices();
-        const response = await withRetry(`courseWorkMaterials.list ${courseId}`, () => services.classroom.courses.courseWorkMaterials.list({ courseId, pageSize: 100 }));
+        const { items } = await listMaterials(services, courseId);
         const q = value.trim().toLowerCase();
-        return (response.data.courseWorkMaterial ?? [])
+        return items
           .filter((m) => !q || (m.title ?? "").toLowerCase().includes(q))
           .map((m) => m.id ?? "")
           .filter(Boolean)
@@ -483,7 +505,7 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
       const materialId = String(variables.materialId ?? "");
       if (!courseId || !materialId) throw new Error("courseId and materialId are required.");
       const services = await getServices();
-      const courses = await listCourses(services, { includeArchived: true });
+      const { items: courses } = await listCourses(services, { includeArchived: true });
       const body = await getMaterialDetail(services, courseId, courses.find((c) => c.id === courseId)?.name ?? courseId, materialId);
       return { contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(body, null, 2) }] };
     } catch (error) {
@@ -498,9 +520,9 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
         const courseId = context?.arguments?.courseId;
         if (!courseId) return [];
         const services = await getServices();
-        const response = await withRetry(`announcements.list ${courseId}`, () => services.classroom.courses.announcements.list({ courseId, pageSize: 100 }));
+        const { items } = await listAnnouncements(services, courseId);
         const q = value.trim().toLowerCase();
-        return (response.data.announcements ?? [])
+        return items
           .filter((a) => !q || (a.text ?? "").toLowerCase().includes(q))
           .map((a) => a.id ?? "")
           .filter(Boolean)
@@ -517,7 +539,7 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
       const announcementId = String(variables.announcementId ?? "");
       if (!courseId || !announcementId) throw new Error("courseId and announcementId are required.");
       const services = await getServices();
-      const courses = await listCourses(services, { includeArchived: true });
+      const { items: courses } = await listCourses(services, { includeArchived: true });
       const body = await getAnnouncementDetail(services, courseId, courses.find((c) => c.id === courseId)?.name ?? courseId, announcementId);
       return { contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(body, null, 2) }] };
     } catch (error) {
@@ -528,13 +550,16 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
   return server;
 }
 
-async function assignmentLink(services: Services, courseId: string, assignmentId: string): Promise<string> {
+async function assignmentLink(services: Services, courseId: string, assignmentId: string): Promise<{ url: string; title: string | null }> {
   try {
     const work = await withRetry(`courseWork.get ${assignmentId}`, () =>
       services.classroom.courses.courseWork.get({ courseId, id: assignmentId }));
-    return work.data.alternateLink ?? `https://classroom.google.com/c/${courseId}`;
+    return {
+      url: work.data.alternateLink ?? `https://classroom.google.com/c/${courseId}`,
+      title: work.data.title ?? null,
+    };
   } catch {
-    return `https://classroom.google.com/c/${courseId}`;
+    return { url: `https://classroom.google.com/c/${courseId}`, title: null };
   }
 }
 
