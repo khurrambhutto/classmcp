@@ -1,26 +1,66 @@
 {
-  "name": "classmcp",
-  "version": "0.2.0",
-  "description": "Local Google Classroom MCP server for students",
+  "name": "gcrclassmcp",
+  "version": "0.3.0-rc.1",
+  "description": "Student-side Google Classroom MCP server: one-call digests, search, downloads, and best-effort submissions for agents.",
   "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/khurrambhutto/classmcp.git"
+  },
+  "homepage": "https://github.com/khurrambhutto/classmcp#readme",
+  "bugs": {
+    "url": "https://github.com/khurrambhutto/classmcp/issues"
+  },
+  "author": "khurrambhutto",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "google-classroom",
+    "google-api",
+    "education",
+    "students",
+    "classroom",
+    "ai-agent",
+    "opencode",
+    "claude",
+    "codex"
+  ],
   "bin": {
     "classmcp": "dist/cli.js"
   },
-  "files": ["dist", "README.md", "LICENSE"],
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "build": "tsc -p tsconfig.build.json",
     "dev": "tsx src/cli.ts",
     "start": "node dist/cli.js serve",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "check": "npm run typecheck && npm run test && npm run build",
+    "prepack": "npm run clean && npm run build",
+    "prepublishOnly": "npm run check && npm run pack:verify",
+    "pack:verify": "node scripts/pack-verify.mjs"
   },
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.17.0",
     "googleapis": "^155.0.0",
-    "keytar": "^7.9.0",
     "open": "^10.1.0",
     "zod": "^3.25.0"
+  },
+  "optionalDependencies": {
+    "keytar": "^7.9.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

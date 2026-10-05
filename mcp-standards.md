@@ -282,7 +282,8 @@ Don't duplicate the same data as both a tool and a resource — link them
    deferred (see §8).
 6. DONE — `resources` (course/assignment/material/announcement templates) +
    `completion` for every id parameter.
-7. Add `ttlMs`/`cacheScope` caching + `instructions` in discover (pagination is done).
+7. DONE — course-index caching (45s TTL, per-services dedupe, no due-state cache)
+   + `instructions` in discover (first 512 chars carry workflow + submission limit).
 8. DONE — `configureClients()`: OpenCode `mcp` key (not `mcpServers`), absolute
    node+dist path, show-exact-command consent; `env` documented in README.
 9. DONE — README: five tools with limits; `test-report-*.md` excluded from npm files.
@@ -299,3 +300,26 @@ Don't duplicate the same data as both a tool and a resource — link them
     topics) instead of an `openWork` stub. Nullable enrichments carry reason
     codes (`*Status` fields) instead of bare nulls, and ACTIVE-only scans report
     `skippedArchived` + accept `includeArchived`.
+
+## 14. 0.3.0 hardening status (2026-10-05)
+
+All release-plan items are implemented and covered by tests:
+
+- Canonical path confinement (`realpath`), exclusive/no-overwrite downloads,
+  stream-enforced size caps, Windows-safe filenames.
+- Submission sequencing: upload failure or attach failure always blocks turn-in;
+  messages derive from final state; `ProjectPermissionDenied` stays best-effort.
+- Pagination for courses/coursework/submissions/materials/announcements/topics
+  with `scanTruncated` metadata; per-endpoint partial errors carry `operation`.
+- Search fetches only requested kinds; empty `kinds` and whitespace queries are
+  rejected client-side.
+- OAuth lifecycle hardening (bind-first, ephemeral port, state, timeout, close),
+  Desktop-only credentials, scope drift detection, atomic `0600`/`0700` secret
+  storage with permission repair, dynamic keytar.
+- Read-only retries with `Retry-After`; writes never retried; 60s Google
+  timeouts; MCP cancellation propagation; exact-id fast paths; 45s course cache.
+- Input trimming/bounds, id+name exclusivity, http(s)-only links, 20-attachment
+  cap; instructions trimmed to the essential 512 chars.
+- Packaging: `gcrclassmcp` name, `classmcp` command, prepack/prepublishOnly,
+  tarball install + stdio smoke test with a secret content scan, CI matrix and
+  tagged provenance publishing.

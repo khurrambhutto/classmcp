@@ -163,6 +163,21 @@ describe("buildServer", () => {
       expect(tool.inputSchema).toBeTruthy();
       expect(tool.outputSchema).toBeTruthy();
     }
+    const byName = new Map(tools.map((t) => [t.name, t]));
+    expect(byName.get("get_overview")?.annotations).toMatchObject({ readOnlyHint: true, idempotentHint: true, openWorldHint: true });
+    expect(byName.get("search")?.annotations).toMatchObject({ readOnlyHint: true });
+    expect(byName.get("download_files")?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true });
+    expect(byName.get("submit_work")?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: false });
+  });
+
+  it("keeps the essential workflow and submission limit in the first 512 instructions chars", async () => {
+    const { client } = await connected();
+    const instructions = client.getInstructions() ?? "";
+    expect(instructions.length).toBeGreaterThan(100);
+    const intro = instructions.slice(0, 512);
+    expect(intro).toContain("get_overview");
+    expect(intro).toContain("submit_work");
+    expect(intro).toMatch(/blocked/);
   });
 
   it("get_overview view=courses returns ids and self-sufficient JSON text", async () => {
@@ -193,6 +208,21 @@ describe("buildServer", () => {
     const { client } = await connected();
     const message = await expectFailure(client, "get_overview", { window: 31 });
     expect(message).toMatch(/30/);
+  });
+
+  it("rejects invalid calls before touching Google", async () => {
+    const { client, services } = await connected();
+    await expectFailure(client, "search", { query: "   " });
+    await expectFailure(client, "search", { query: "waves", kinds: [] });
+    await expectFailure(client, "get_assignment", { courseId: "c1", course: "Physics", assignment: "waves" });
+    await expectFailure(client, "submit_work", { courseId: "c1", assignmentId: "w1", link: { url: "ftp://example.com/x" } });
+    await expectFailure(client, "submit_work", {
+      courseId: "c1", assignmentId: "w1",
+      files: Array.from({ length: 10 }, (_, i) => ({ path: `/tmp/f${i}.txt` })),
+      fileIds: Array.from({ length: 10 }, (_, i) => `d${i}`),
+      link: { url: "https://example.com" },
+    });
+    expect((services.classroom.courses.list as ReturnType<typeof vi.fn>).mock.calls.length).toBe(0);
   });
 
   it("get_assignment resolves fuzzy refs and exposes attachment Drive ids", async () => {

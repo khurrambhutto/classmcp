@@ -53,16 +53,23 @@ function isProjectDenied(error: unknown): boolean {
   return /ProjectPermissionDenied|Developer Console project/i.test(message);
 }
 
-const READ_ONLY = { readOnlyHint: true, idempotentHint: true } as const;
+const READ_ONLY = { readOnlyHint: true, idempotentHint: true, openWorldHint: true } as const;
+
+/** Named id/name parameters are mutually exclusive per reference. */
+function refPairError(label: string, id: string | undefined, name: string | undefined): string | null {
+  if (id !== undefined && name !== undefined) return `Pass ${label}Id or ${label}, not both.`;
+  return null;
+}
+
+const MAX_SUBMISSION_ATTACHMENTS = 20;
 
 export function buildServer(getServices: () => Promise<Services>): McpServer {
   const server = new McpServer({ name: "classmcp", version: VERSION }, {
     instructions:
-      "Student-side Google Classroom. Start with get_overview (due/missing/new/grades/courses); drill into get_assignment; " +
-      "find items with search; fetch handouts with download_files; submit_work uploads to Drive and, when Google blocks " +
-      "attach/turn-in (it usually does: only the app that created an assignment may modify submissions), returns links to " +
-      "finish in the Classroom UI. Tools accept course names or ids and assignment title fragments or ids. Row ids are " +
-      "stable and can be passed to follow-up calls.",
+      "Student-side Google Classroom. Start with get_overview (due/missing/new/grades/courses), drill in with " +
+      "get_assignment, find anything via search, fetch handouts with download_files. submit_work uploads to Drive " +
+      "then best-effort attaches and can turn in: Google usually blocks teacher-created work (blocked:true) — finish " +
+      "via the returned Classroom link. Tools accept course/assignment names or stable ids; ids work for chaining.",
   });
 
   server.registerTool("get_overview", {
@@ -99,6 +106,8 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
     annotations: READ_ONLY,
   }, async ({ courseId, course, assignmentId, assignment, maxDescChars }) => {
     try {
+      const pairError = refPairError("course", courseId, course) ?? refPairError("assignment", assignmentId, assignment);
+      if (pairError) return fail(new Error(pairError));
       const services = await getServices();
       const courseRes = await resolveCourse(services, { courseId, course } satisfies CourseRef);
       if (!courseRes.ok) return fail(new Error(courseRes.message));
@@ -120,6 +129,8 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
     annotations: READ_ONLY,
   }, async ({ query, courseId, course, kinds, includeArchived, limit, detail }, extra) => {
     try {
+      const pairError = refPairError("course", courseId, course);
+      if (pairError) return fail(new Error(pairError));
       const services = await getServices();
       let scopedCourseId: string | undefined;
       if (courseId || course) {
@@ -145,9 +156,14 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
       "names or ids. Per-file errors do not abort the rest.",
     inputSchema: DownloadInputShape,
     outputSchema: DownloadResultSchema,
-    annotations: { readOnlyHint: false, idempotentHint: true, openWorldHint: true },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async ({ courseId, course, assignmentId, assignment, materialId, material, announcementId, announcement, fileIds, destinationDir, exportAs }, extra) => {
     try {
+      const pairError = refPairError("course", courseId, course)
+        ?? refPairError("assignment", assignmentId, assignment)
+        ?? refPairError("material", materialId, material)
+        ?? refPairError("announcement", announcementId, announcement);
+      if (pairError) return fail(new Error(pairError));
       const services = await getServices();
       const hasAssignmentRef = Boolean(assignmentId || assignment);
       const hasMaterialRef = Boolean(materialId || material);
@@ -258,6 +274,8 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   }, async ({ courseId, course, assignmentId, assignment, files, fileIds, link, turnIn, confirmTurnIn }, extra) => {
     try {
+      const pairError = refPairError("course", courseId, course) ?? refPairError("assignment", assignmentId, assignment);
+      if (pairError) return fail(new Error(pairError));
       const services = await getServices();
       if (turnIn && confirmTurnIn !== "I confirm turn in") {
         return fail(new Error("turnIn requires confirmTurnIn to be exactly: I confirm turn in"));
@@ -265,6 +283,10 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
       const hasWork = (files?.length ?? 0) > 0 || (fileIds?.length ?? 0) > 0 || Boolean(link) || Boolean(turnIn);
       if (!hasWork) {
         return fail(new Error("Provide files, fileIds, or link to attach, or set turnIn with confirmTurnIn."));
+      }
+      const requestedTotal = (files?.length ?? 0) + (fileIds?.length ?? 0) + (link ? 1 : 0);
+      if (requestedTotal > MAX_SUBMISSION_ATTACHMENTS) {
+        return fail(new Error(`At most ${MAX_SUBMISSION_ATTACHMENTS} attachments per submission, got ${requestedTotal}. Split the work into fewer files.`));
       }
       const courseRes = await resolveCourse(services, { courseId, course } satisfies CourseRef);
       if (!courseRes.ok) return fail(new Error(courseRes.message));

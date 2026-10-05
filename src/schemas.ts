@@ -4,23 +4,23 @@ import { z } from "zod";
 // Every targeting tool accepts an id OR a fuzzy human ref, resolved server-side.
 
 export const CourseRefShape = {
-  courseId: z.string().optional().describe("Course id (from get_overview view=courses). Mutually exclusive with course."),
-  course: z.string().optional().describe("Course name or fragment, e.g. \"Physics 101\". Fuzzy-matched; use courseId when ambiguous."),
+  courseId: z.string().trim().min(1).max(200).optional().describe("Course id (from get_overview view=courses). Mutually exclusive with course."),
+  course: z.string().trim().min(1).max(200).optional().describe("Course name or fragment, e.g. \"Physics 101\". Fuzzy-matched; use courseId when ambiguous."),
 };
 
 export const AssignmentRefShape = {
-  assignmentId: z.string().optional().describe("Coursework id (from get_overview/get_assignment). Mutually exclusive with assignment."),
-  assignment: z.string().optional().describe("Assignment title or fragment. Fuzzy-matched within the course; use assignmentId when ambiguous."),
+  assignmentId: z.string().trim().min(1).max(200).optional().describe("Coursework id (from get_overview/get_assignment). Mutually exclusive with assignment."),
+  assignment: z.string().trim().min(1).max(300).optional().describe("Assignment title or fragment. Fuzzy-matched within the course; use assignmentId when ambiguous."),
 };
 
 export const MaterialRefShape = {
-  materialId: z.string().optional().describe("Course material id (from search kinds=[\"material\"]). Mutually exclusive with material. Pass only one of assignment, material, or announcement."),
-  material: z.string().optional().describe("Material title or fragment. Fuzzy-matched within the course; use materialId when ambiguous."),
+  materialId: z.string().trim().min(1).max(200).optional().describe("Course material id (from search kinds=[\"material\"]). Mutually exclusive with material. Pass only one of assignment, material, or announcement."),
+  material: z.string().trim().min(1).max(300).optional().describe("Material title or fragment. Fuzzy-matched within the course; use materialId when ambiguous."),
 };
 
 export const AnnouncementRefShape = {
-  announcementId: z.string().optional().describe("Announcement id (from search kinds=[\"announcement\"]). Mutually exclusive with announcement. Pass only one of assignment, material, or announcement."),
-  announcement: z.string().optional().describe("Announcement text fragment. Fuzzy-matched within the course; use announcementId when ambiguous."),
+  announcementId: z.string().trim().min(1).max(200).optional().describe("Announcement id (from search kinds=[\"announcement\"]). Mutually exclusive with announcement. Pass only one of assignment, material, or announcement."),
+  announcement: z.string().trim().min(1).max(300).optional().describe("Announcement text fragment. Fuzzy-matched within the course; use announcementId when ambiguous."),
 };
 
 export const DetailShape = z
@@ -305,18 +305,23 @@ export const DownloadInputShape = {
   ...AssignmentRefShape,
   ...MaterialRefShape,
   ...AnnouncementRefShape,
-  fileIds: z.array(z.string()).max(20).optional().describe("Download only these Drive files instead of every attachment. When present, only these files are downloaded (the scoped item's other attachments are skipped). Max 20."),
-  destinationDir: z.string().optional().describe("Must resolve inside ~/Downloads or $CLASSMCP_WORKDIR. Default: <root>/classmcp. CLASSMCP_WORKDIR must be exported in the MCP server's environment config (setting it per call does nothing)."),
+  fileIds: z.array(z.string().trim().min(1).max(500)).max(20).optional().describe("Download only these Drive files instead of every attachment. When present, only these files are downloaded (the scoped item's other attachments are skipped). Max 20."),
+  destinationDir: z.string().trim().min(1).max(1000).optional().describe("Must resolve inside ~/Downloads or $CLASSMCP_WORKDIR. Default: <root>/classmcp. CLASSMCP_WORKDIR must be exported in the MCP server's environment config (setting it per call does nothing)."),
   exportAs: z.enum(["pdf", "docx", "xlsx", "pptx"]).optional().describe("Format for Google Docs/Slides/Sheets. Defaults: docx/xlsx/pptx."),
 };
+
+const HttpUrl = z.string().trim().max(2000).refine((value) => /^https?:\/\//i.test(value), "URL must start with http:// or https://.");
 
 export const SubmitInputShape = {
   ...CourseRefShape,
   ...AssignmentRefShape,
-  files: z.array(z.object({ path: z.string(), name: z.string().optional() })).max(10).optional()
+  files: z.array(z.object({
+    path: z.string().trim().min(1).max(1000),
+    name: z.string().trim().min(1).max(200).optional(),
+  })).max(10).optional()
     .describe("Local files to upload to Drive (max 10, 100 MB each). Paths must stay inside ~/Downloads or $CLASSMCP_WORKDIR."),
-  fileIds: z.array(z.string()).max(10).optional().describe("Existing Drive file ids to try to attach. Max 10."),
-  link: z.object({ url: z.string(), title: z.string().optional() }).optional().describe("A URL attachment to try to attach."),
+  fileIds: z.array(z.string().trim().min(1).max(500)).max(10).optional().describe("Existing Drive file ids to try to attach. Max 10."),
+  link: z.object({ url: HttpUrl, title: z.string().trim().min(1).max(300).optional() }).optional().describe("A URL attachment (http/https) to try to attach."),
   turnIn: z.boolean().default(false).describe("false (default) = attach only; true = also attempt turn-in (needs confirmTurnIn)."),
   confirmTurnIn: z.literal("I confirm turn in").optional().describe("Required exactly when turnIn is true."),
 };
