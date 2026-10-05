@@ -1,6 +1,7 @@
 import type { classroom_v1 } from "googleapis";
 import type { GoogleServices } from "./google.js";
 import { withRetry } from "./google.js";
+import { mapPool } from "./util.js";
 import type {
   AnnouncementDetail, AnnouncementSummary, Attachment, AssignmentDetail, CourseDetail,
   CourseRow, MaterialDetail, MaterialSummary, NewRow, OverviewResult,
@@ -67,15 +68,6 @@ export function summarizeMaterial(m: classroom_v1.Schema$Material): string {
 }
 
 const DONE_STATES = new Set(["TURNED_IN", "RETURNED"]);
-
-export async function mapPool<T, R>(items: T[], size: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const out: R[] = [];
-  const width = Math.max(1, Math.floor(size));
-  for (let i = 0; i < items.length; i += width) {
-    out.push(...(await Promise.all(items.slice(i, i + width).map(fn))));
-  }
-  return out;
-}
 
 export async function listCourses(services: GoogleServices, opts: { includeArchived?: boolean } = {}): Promise<CourseRow[]> {
   const includeArchived = opts.includeArchived ?? true;

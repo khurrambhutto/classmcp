@@ -15,7 +15,7 @@ function datePlus(days: number): { year: number; month: number; day: number } {
 
 const PROJECT_DENIED = new Error("@ProjectPermissionDenied The Developer Console project is not permitted to make this request.");
 
-function makeServices(overrides: { denyWrites?: boolean } = {}) {
+function makeServices(overrides: { denyWrites?: boolean; uploadError?: Error; attachError?: Error } = {}) {
   const courses = [
     { id: "c1", name: "Physics 101", section: "A", courseState: "ACTIVE" },
     { id: "c2", name: "Physics 102", section: "B", courseState: "ACTIVE" },
@@ -49,6 +49,7 @@ function makeServices(overrides: { denyWrites?: boolean } = {}) {
     c3: [{ id: "s4", courseWorkId: "w4", state: "CREATED", late: false }],
   };
   const modifyAttachments = vi.fn(async () => {
+    if (overrides.attachError) throw overrides.attachError;
     if (overrides.denyWrites !== false) throw PROJECT_DENIED;
     return { data: {} };
   });
@@ -104,7 +105,10 @@ function makeServices(overrides: { denyWrites?: boolean } = {}) {
           return { data: { id: params.fileId, name: `${params.fileId}.bin`, mimeType: "application/pdf", size: "3" } };
         }),
         export: vi.fn(async () => ({ data: Buffer.from("x") })),
-        create: vi.fn(async () => ({ data: { id: "u1", name: "essay.docx", webViewLink: "https://drive.google.com/file/u1", size: "9" } })),
+        create: vi.fn(async () => {
+          if (overrides.uploadError) throw overrides.uploadError;
+          return { data: { id: "u1", name: "essay.docx", webViewLink: "https://drive.google.com/file/u1", size: "9" } };
+        }),
       },
     },
     auth: {},
@@ -112,7 +116,7 @@ function makeServices(overrides: { denyWrites?: boolean } = {}) {
   return { services, modifyAttachments, turnIn };
 }
 
-async function connected(overrides: { denyWrites?: boolean } = {}) {
+async function connected(overrides: { denyWrites?: boolean; uploadError?: Error; attachError?: Error } = {}) {
   const { services, modifyAttachments, turnIn } = makeServices(overrides);
   const server = buildServer(async () => services);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -234,6 +238,103 @@ describe("buildServer", () => {
     expect(data.turnedIn).toBe(false);
     expect(data.assignmentLink).toBe("https://classroom.google.com/c/c1/w1");
     expect(String(data.message)).toContain("Finish in Classroom");
+    expect(String(data.message)).not.toContain("Attached 1");
+  });
+
+  it("submit_work attaches and turns in when writes are allowed", async () => {
+    const { client, modifyAttachments, turnIn } = await connected({ denyWrites: false });
+    const result = await client.callTool({
+      name: "submit_work",
+      arguments: { courseId: "c1", assignmentId: "w1", fileIds: ["d9"], turnIn: true, confirmTurnIn: "I confirm turn in" },
+    });
+    const data = structuredOf(result);
+    expect(modifyAttachments).toHaveBeenCalledTimes(1);
+    expect(turnIn).toHaveBeenCalledTimes(1);
+    expect(data).toMatchObject({
+      attachmentAttempted: true, attached: true, attachedCount: 1, turnInAttempted: true, turnedIn: true,
+      blocked: false, turnInSkippedReason: null, uploadsRequested: 0, uploadsSucceeded: 0, uploadsFailed: 0, warnings: [],
+    });
+    expect(String(data.message)).toContain("Attached 1 item(s)");
+    expect(String(data.message)).toContain("Turned in");
+  });
+
+  it("submit_work does not turn in when a requested upload fails", async () => {
+    const dest = await tempDownloadDir();
+    try {
+      const file = path.join(dest, "essay.docx");
+      await fs.writeFile(file, "content");
+      const { client, modifyAttachments, turnIn } = await connected({ denyWrites: false, uploadError: new Error("network down") });
+      const result = await client.callTool({
+        name: "submit_work",
+        arguments: { courseId: "c1", assignmentId: "w1", files: [{ path: file }], turnIn: true, confirmTurnIn: "I confirm turn in" },
+      });
+      const data = structuredOf(result);
+      expect(modifyAttachments).not.toHaveBeenCalled();
+      expect(turnIn).not.toHaveBeenCalled();
+      expect(data).toMatchObject({ uploadsRequested: 1, uploadsSucceeded: 0, uploadsFailed: 1, attached: false, turnedIn: false });
+      expect(String(data.turnInSkippedReason)).toMatch(/upload failed/);
+      expect(String(data.message)).toMatch(/Upload failed for essay\.docx/);
+      expect(String(data.message)).not.toMatch(/Attached \d/);
+      expect(String(data.message)).toMatch(/Every upload failed|every upload failed|Nothing was attached/);
+    } finally {
+      await fs.rm(dest, { recursive: true, force: true });
+    }
+  });
+
+  it("submit_work skips turn-in when attachment fails for a non-permission reason", async () => {
+    const attachError = Object.assign(new Error("bad request"), { code: 400 });
+    const { client, turnIn } = await connected({ denyWrites: false, attachError });
+    const result = await client.callTool({
+      name: "submit_work",
+      arguments: { courseId: "c1", assignmentId: "w1", fileIds: ["d9"], turnIn: true, confirmTurnIn: "I confirm turn in" },
+    });
+    const data = structuredOf(result);
+    expect(turnIn).not.toHaveBeenCalled();
+    expect(data).toMatchObject({ attachmentAttempted: true, attached: false, turnInAttempted: false, turnedIn: false });
+    expect(String(data.turnInSkippedReason)).toMatch(/attachment step failed/);
+    expect((data.warnings as string[]).join(" ")).toMatch(/Attach failed: bad request/);
+  });
+
+  it("submit_work allows a turn-in-only call with confirmation", async () => {
+    const { client, modifyAttachments, turnIn } = await connected({ denyWrites: false });
+    const result = await client.callTool({
+      name: "submit_work",
+      arguments: { courseId: "c1", assignmentId: "w1", turnIn: true, confirmTurnIn: "I confirm turn in" },
+    });
+    const data = structuredOf(result);
+    expect(modifyAttachments).not.toHaveBeenCalled();
+    expect(turnIn).toHaveBeenCalledTimes(1);
+    expect(data).toMatchObject({ attachmentAttempted: false, attached: false, turnInAttempted: true, turnedIn: true });
+    expect(String(data.message)).toContain("Turned in");
+  });
+
+  it("submit_work with a partial upload failure never claims attachment success", async () => {
+    const dest = await tempDownloadDir();
+    try {
+      const good = path.join(dest, "good.docx");
+      await fs.writeFile(good, "content");
+      const { client, modifyAttachments, turnIn } = await connected({
+        denyWrites: false,
+        uploadError: undefined,
+      });
+      // One real file plus one missing file: the missing one fails the upload step.
+      const result = await client.callTool({
+        name: "submit_work",
+        arguments: {
+          courseId: "c1", assignmentId: "w1",
+          files: [{ path: good }, { path: path.join(dest, "missing.docx") }],
+          turnIn: true, confirmTurnIn: "I confirm turn in",
+        },
+      });
+      const data = structuredOf(result);
+      expect(data).toMatchObject({ uploadsRequested: 2, uploadsSucceeded: 1, uploadsFailed: 1 });
+      expect(modifyAttachments).not.toHaveBeenCalled();
+      expect(turnIn).not.toHaveBeenCalled();
+      expect(String(data.message)).toMatch(/Nothing was attached|nothing was attached/);
+      expect((data.uploaded as Array<{ id: string | null }>).some((u) => u.id === "u1")).toBe(true);
+    } finally {
+      await fs.rm(dest, { recursive: true, force: true });
+    }
   });
 
   it("download_files rejects destinations outside the allowed roots", async () => {
@@ -351,16 +452,18 @@ describe("buildServer", () => {
 
   it("download_files falls back to materials when a material id or title is passed as assignment", async () => {
     const { client } = await connected();
-    const dest = await tempDownloadDir();
+    const destA = await tempDownloadDir();
+    const destB = await tempDownloadDir();
     try {
-      const byId = structuredOf(await client.callTool({ name: "download_files", arguments: { courseId: "c1", assignmentId: "m1", destinationDir: dest } })) as { savedCount: number; saved: Array<{ name: string }> };
+      const byId = structuredOf(await client.callTool({ name: "download_files", arguments: { courseId: "c1", assignmentId: "m1", destinationDir: destA } })) as { savedCount: number; saved: Array<{ name: string }> };
       expect(byId.savedCount).toBe(1);
       expect(byId.saved[0].name).toBe("slides.pdf");
-      const byTitle = structuredOf(await client.callTool({ name: "download_files", arguments: { courseId: "c1", assignment: "Slides", destinationDir: dest } })) as { savedCount: number; saved: Array<{ name: string }> };
+      const byTitle = structuredOf(await client.callTool({ name: "download_files", arguments: { courseId: "c1", assignment: "Slides", destinationDir: destB } })) as { savedCount: number; saved: Array<{ name: string }> };
       expect(byTitle.savedCount).toBe(1);
       expect(byTitle.saved[0].name).toBe("slides.pdf");
     } finally {
-      await fs.rm(dest, { recursive: true, force: true });
+      await fs.rm(destA, { recursive: true, force: true });
+      await fs.rm(destB, { recursive: true, force: true });
     }
   });
 

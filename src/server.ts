@@ -250,22 +250,41 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
       if (!workRes.ok) return fail(new Error(workRes.message));
       const work = workRes.item;
 
-      const uploaded = files?.length ? await uploadLocalFiles(services.drive, files) : [];
-      const addAttachments = [
-        ...uploaded.filter((item) => item.id).map((item) => ({ driveFile: { id: item.id as string } })),
-        ...(fileIds ?? []).map((id) => ({ driveFile: { id } })),
-        ...(link ? [{ link: { url: link.url, ...(link.title ? { title: link.title } : {}) } }] : []),
-      ];
+      const requestedFiles = files ?? [];
+      const requestedFileIds = [...new Set((fileIds ?? []).map((id) => id.trim()).filter(Boolean))];
+      const requestedLink = link ? [{ link: { url: link.url, ...(link.title ? { title: link.title } : {}) } }] : [];
+      const warnings: string[] = [];
 
-      let attached = false;
-      let turnedIn = false;
-      let blocked = false;
-      const notes: string[] = [];
+      const uploaded = requestedFiles.length > 0 ? await uploadLocalFiles(services.drive, requestedFiles) : [];
+      const uploadsSucceeded = uploaded.filter((item) => item.id !== null && item.error === null);
+      const uploadsFailed = uploaded.length - uploadsSucceeded.length;
       for (const item of uploaded) {
-        if (item.error) notes.push(`Upload failed for ${item.name}: ${item.error}`);
+        if (item.error) warnings.push(`Upload failed for ${item.name}: ${item.error}`);
       }
 
-      if (addAttachments.length > 0) {
+      const addAttachments = [
+        ...uploadsSucceeded.map((item) => ({ driveFile: { id: item.id as string } })),
+        ...requestedFileIds.map((id) => ({ driveFile: { id } })),
+        ...requestedLink,
+      ];
+
+      let attachmentAttempted = false;
+      let attached = false;
+      let attachedCount = 0;
+      let turnInAttempted = false;
+      let turnedIn = false;
+      let blocked = false;
+      let turnInSkippedReason: string | null = null;
+
+      // Uploads are non-idempotent writes and Google has no undo: never attach a
+      // partial set, never turn in after a failed earlier step.
+      if (requestedFiles.length > 0 && uploadsFailed > 0) {
+        warnings.push("Skipped attaching because at least one upload failed; successful Drive links are still returned.");
+        if (turnIn) turnInSkippedReason = "an upload failed";
+      }
+
+      if (addAttachments.length > 0 && uploadsFailed === 0) {
+        attachmentAttempted = true;
         try {
           await withRetry(`modifyAttachments ${work.id}`, () =>
             services.classroom.courses.courseWork.studentSubmissions.modifyAttachments({
@@ -273,17 +292,21 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
               requestBody: { addAttachments },
             }));
           attached = true;
+          attachedCount = addAttachments.length;
         } catch (error) {
           if (isProjectDenied(error)) {
             blocked = true;
-            notes.push("Google rejected the attachment: only the app that created an assignment may modify submissions.");
+            warnings.push("Google rejected the attachment: only the app that created an assignment may modify submissions.");
+            if (turnIn) turnInSkippedReason = "Google blocked the attachment (project restriction)";
           } else {
-            notes.push(`Attach failed: ${error instanceof Error ? error.message : String(error)}`);
+            warnings.push(`Attach failed: ${error instanceof Error ? error.message : String(error)}`);
+            if (turnIn) turnInSkippedReason = "the attachment step failed";
           }
         }
       }
 
-      if (turnIn) {
+      if (turnIn && turnInSkippedReason === null) {
+        turnInAttempted = true;
         try {
           await withRetry(`turnIn ${work.id}`, () =>
             services.classroom.courses.courseWork.studentSubmissions.turnIn({
@@ -293,9 +316,9 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
         } catch (error) {
           if (isProjectDenied(error)) {
             blocked = true;
-            notes.push("Google rejected the turn-in: only the app that created an assignment may modify submissions.");
+            warnings.push("Google rejected the turn-in: only the app that created an assignment may modify submissions.");
           } else {
-            notes.push(`Turn-in failed: ${error instanceof Error ? error.message : String(error)}`);
+            warnings.push(`Turn-in failed: ${error instanceof Error ? error.message : String(error)}`);
           }
         }
       }
@@ -309,21 +332,29 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
         myState = subs.data.studentSubmissions?.[0]?.state ?? "NEW";
       } catch { /* state is best-effort */ }
 
-      const uploadedOk = uploaded.filter((item) => !item.error).length;
+      // The message is derived from final state only, so it can never claim an
+      // attachment or turn-in that did not happen.
       const assignmentUrl = await assignmentLink(services, courseRes.item.id, work.id);
-      let message: string;
-      if (blocked) {
-        message =
-          `Uploaded ${uploadedOk} file(s) to Drive. ${notes.join(" ")} ` +
-          `Finish in Classroom (about 15 seconds): open ${work.title} at ` +
-          `${assignmentUrl} — add the file from Drive, then click Turn in.`;
-      } else if (turnedIn) {
-        message = `Attached ${addAttachments.length} item(s) and turned in ${work.title}.`;
-      } else if (attached) {
-        message = `Attached ${addAttachments.length} item(s) to ${work.title}. Not turned in; set turnIn=true with confirmTurnIn to finish.`;
-      } else {
-        message = notes.length > 0 ? notes.join(" ") : "Nothing was attached.";
+      const parts: string[] = [];
+      // Text-only hosts must see the concrete failure detail, not just warnings[].
+      for (const warning of warnings) {
+        if (/^(Upload failed|Attach failed|Turn-in failed)/.test(warning)) parts.push(warning);
       }
+      if (requestedFiles.length > 0) parts.push(`Uploaded ${uploadsSucceeded.length}/${requestedFiles.length} file(s) to Drive.`);
+      if (attached) parts.push(`Attached ${attachedCount} item(s) to ${work.title}.`);
+      if (turnedIn) parts.push(`Turned in ${work.title}.`);
+      if (turnInSkippedReason) parts.push(`Skipped turn-in because ${turnInSkippedReason}.`);
+      if (blocked) {
+        parts.push("Google blocked the change: only the app that created this assignment may modify submissions.");
+        parts.push(`Finish in Classroom (about 15 seconds): open ${assignmentUrl}, add the file from Drive, then click Turn in.`);
+      } else if (!attached && !turnedIn) {
+        if (attachmentAttempted) parts.push("Attaching failed; see warnings.");
+        else if (addAttachments.length === 0 && requestedFiles.length > 0 && uploadsFailed > 0) parts.push("Nothing was attached because every upload failed.");
+        else if (addAttachments.length > 0) parts.push("Nothing was attached.");
+      } else if (attached && !turnedIn && !turnInSkippedReason) {
+        parts.push(`Not turned in; set turnIn=true with confirmTurnIn to finish (or turn in from ${assignmentUrl}).`);
+      }
+      const message = parts.join(" ");
 
       return ok({
         courseId: courseRes.item.id,
@@ -331,10 +362,18 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
         title: work.title,
         assignmentLink: assignmentUrl,
         uploaded,
+        uploadsRequested: requestedFiles.length,
+        uploadsSucceeded: uploadsSucceeded.length,
+        uploadsFailed,
+        attachmentAttempted,
         attached,
+        attachedCount,
+        turnInAttempted,
         turnedIn,
+        turnInSkippedReason,
         myState,
         blocked,
+        warnings,
         message,
       });
     } catch (error) { return fail(error); }

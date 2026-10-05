@@ -252,10 +252,18 @@ export const SubmitResultSchema = z.object({
   title: z.string(),
   assignmentLink: z.string().nullable().describe("Open in Classroom to attach/turn in."),
   uploaded: z.array(UploadedFileSchema).describe("Files placed in Drive (this part always works)."),
+  uploadsRequested: z.number(),
+  uploadsSucceeded: z.number(),
+  uploadsFailed: z.number(),
+  attachmentAttempted: z.boolean().describe("True when the API call to attach items was made."),
   attached: z.boolean().describe("True only if Google accepted the attachment."),
+  attachedCount: z.number().describe("Items Google accepted onto the submission (0 unless attached)."),
+  turnInAttempted: z.boolean(),
   turnedIn: z.boolean(),
+  turnInSkippedReason: z.string().nullable().describe("Why turn-in was not attempted after a failed earlier step."),
   myState: z.string(),
   blocked: z.boolean().describe("True when Google's project restriction rejected attach/turn-in."),
+  warnings: z.array(z.string()).describe("Per-step problems; empty on a clean run."),
   message: z.string().describe("What happened and the exact next step for the student."),
 });
 
