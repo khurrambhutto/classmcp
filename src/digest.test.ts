@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildWorkRows, daysUntil, dueToDay, dueToMillis, normalizeAttachments, summarizeMaterial, trimText,
+  buildWorkRows, daysUntil, dueToDay, dueToMillis, normalizeAttachments, summarizeMaterial, trimText, trimWithStatus,
 } from "./digest.js";
 
 describe("digest helpers", () => {
@@ -80,6 +80,17 @@ describe("normalizeAttachments", () => {
   it("skips junk entries and empty lists", () => {
     expect(normalizeAttachments([])).toEqual([]);
     expect(normalizeAttachments([null, "nope", 7])).toEqual([]);
+  });
+});
+
+describe("trimWithStatus", () => {
+  it("reports full, trimmed, or empty — never a bare ambiguous string", () => {
+    expect(trimWithStatus("hello world", 20)).toEqual({ value: "hello world", status: "full" });
+    expect(trimWithStatus("hello world", 5)).toEqual({ value: "hello…", status: "trimmed" });
+    expect(trimWithStatus("", 10)).toEqual({ value: "", status: "empty" });
+    expect(trimWithStatus("   ", 10)).toEqual({ value: "", status: "empty" });
+    expect(trimWithStatus(undefined, 10)).toEqual({ value: "", status: "empty" });
+    expect(trimWithStatus("nonempty", 0)).toEqual({ value: "…", status: "trimmed" });
   });
 });
 

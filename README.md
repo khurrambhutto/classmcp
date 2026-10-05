@@ -54,9 +54,9 @@ retried with backoff. Partial success is reported in-band (`errors[]` on
 
 | Tool | Answers | Key parameters |
 | --- | --- | --- |
-| `get_overview` | Digest of the whole classroom | `view` `due`\|`missing`\|`new`\|`grades`\|`courses` (default `due`); `window` 1-30 days (default 7); `limit` 1-50 (default 20); `query` text filter; `detail` `concise`\|`detailed` |
+| `get_overview` | Digest of the whole classroom | `view` `due`\|`missing`\|`new`\|`grades`\|`courses` (default `due`); `window` 1-30 days (default 7); `limit` 1-50 (default 20); `query` text filter; `includeArchived` scans ARCHIVED courses too (result reports `skippedArchived` so narrowing is never silent); `detail` `concise`\|`detailed` |
 | `get_assignment` | Full detail of one assignment: prompt, due/`daysLeft`, `myState`/late/grade, rubric (when present), teacher attachments with Drive file ids, my attachments, submission history, link | course + assignment fuzzy ref or ids; `maxDescChars` 0-2000 (default 400) trims the prompt |
-| `search` | Keyword search across assignments, materials, announcements in ACTIVE courses (all tokens must match title/description/text) | `query`; `kinds` filter; `limit` 1-30 (default 10); optional course filter; trimmed snippets |
+| `search` | Keyword search across assignments, materials, announcements in ACTIVE courses (all tokens must match title/description/text); hits carry normalized `attachments` with Drive ids, so any hit is downloadable | `query`; `kinds` filter; `limit` 1-30 (default 10); optional course filter; `includeArchived`; trimmed snippets |
 | `download_files` | One assignment's attachments (or explicit file ids) on local disk | `fileIds` ≤20 or all attachments; `exportAs` `pdf`\|`docx`\|`xlsx`\|`pptx` for Google Docs/Sheets/Slides (defaults `docx`/`xlsx`/`pptx` — raw media download fails on native docs, so they are exported via `drive.files.export`); `destinationDir` must resolve inside `~/Downloads` or `$CLASSMCP_WORKDIR` (default `<root>/classmcp`); per-file partial success |
 | `submit_work` | Best-effort submission (see below) | up to 10 local files, 100 MB each; `turnIn: true` additionally requires `confirmTurnIn: "I confirm turn in"` |
 
@@ -68,10 +68,29 @@ discovery round-trip needed. `get_overview.detail` (`concise` default,
 
 ## MCP resources
 
-- `classroom://courses/{courseId}` — JSON overview of one course with recent
-  coursework.
-- `classroom://courses/{courseId}/assignments/{assignmentId}` — compact
-  assignment status (turn-in state, grade, materials).
+Every kind `search` returns has a reader; the resource payload is the same JSON
+the tools produce (one serializer, two access paths):
+
+- `classroom://courses/{courseId}` — course reader: open/missing work, recent
+  materials with attachments, recent announcements, topics.
+- `classroom://courses/{courseId}/assignments/{assignmentId}` — full assignment
+  detail (same shape as `get_assignment`).
+- `classroom://courses/{courseId}/materials/{materialId}` — material detail with
+  attachment Drive ids (same shape as `search` material hits, plus description).
+- `classroom://courses/{courseId}/announcements/{announcementId}` — announcement
+  detail with full text and attachments.
+
+All four autocomplete their ids from names/titles.
+
+Nullable enrichment fields carry reason codes instead of bare nulls:
+`promptStatus`/`descriptionStatus`/`textStatus` (`full`\|`trimmed`\|`empty`),
+`rubricStatus`/`topicStatus` (`present`\|`none`\|`denied`\|`error`),
+`historyStatus` (`present`\|`none`\|`unavailable`), `topicsStatus` — so "no
+rubric" is never confused with "could not read the rubric". Known API limits
+behind these codes: Google omits `submissionHistory` for student tokens (so
+`historyStatus` is usually `unavailable`) and `topics.list` needs the
+`classroom.topics` scope (so `topicsStatus` is `denied` with the current scope
+set).
 
 Both support `completion/complete`: type part of a course or assignment name to
 get matching ids.

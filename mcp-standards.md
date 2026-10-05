@@ -275,11 +275,13 @@ Don't duplicate the same data as both a tool and a resource — link them
 1. DONE — descriptions state bounds/defaults inline (all five tools).
 2. DONE — `outputSchema` + `structuredContent` on all tools (keep text summary).
 3. DONE — handler try/catch → `isError: true` actionable messages + 429/5xx retry/backoff.
-4. Confine `submit_work` upload paths to the allow-listed dir (`download_files`
-   destination confinement is done).
+4. DONE — path confinement for both `download_files` destinations and
+   `submit_work` upload sources (`assertInsideRoots`, tested incl. prefix-boundary
+   escapes).
 5. Literal `confirmTurnIn` is kept deliberately: host compatibility; elicitation
    deferred (see §8).
-6. DONE — `resources` (course/assignment templates) + `completion` for `courseId`.
+6. DONE — `resources` (course/assignment/material/announcement templates) +
+   `completion` for every id parameter.
 7. Add `ttlMs`/`cacheScope` caching + `instructions` in discover (pagination is done).
 8. DONE — `configureClients()`: OpenCode `mcp` key (not `mcpServers`), absolute
    node+dist path, show-exact-command consent; `env` documented in README.
@@ -290,3 +292,10 @@ Don't duplicate the same data as both a tool and a resource — link them
     coursework — verified live 2026-09-24. The five-tool surface reflects this:
     `submit_work` = upload + best-effort + UI links; no detach/unsubmit tools
     because the API has no `removeAttachments` and `reclaim` is blocked.
+12. DONE — search/reader contract (probed 2026-09-25): every kind `search` returns
+    is now readable. Materials/announcements have resource templates; search hits
+    carry normalized `attachments` with Drive ids (feeding `download_files`);
+    the course resource is a full reader (work + materials + announcements +
+    topics) instead of an `openWork` stub. Nullable enrichments carry reason
+    codes (`*Status` fields) instead of bare nulls, and ACTIVE-only scans report
+    `skippedArchived` + accept `includeArchived`.

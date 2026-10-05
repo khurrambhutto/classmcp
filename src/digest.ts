@@ -2,14 +2,15 @@ import type { classroom_v1 } from "googleapis";
 import type { GoogleServices } from "./google.js";
 import { withRetry } from "./google.js";
 import type {
-  Attachment, AssignmentDetail, CourseRow, NewRow, OverviewResult,
+  AnnouncementDetail, AnnouncementSummary, Attachment, AssignmentDetail, CourseDetail,
+  CourseRow, MaterialDetail, MaterialSummary, NewRow, OverviewResult,
   PartialError, RubricCriterion, SearchHit, SearchResult, WorkRow,
 } from "./schemas.js";
 
 type HistoryEntry = NonNullable<AssignmentDetail["history"]>[number];
 
-export type OverviewOptions = { view?: "due" | "missing" | "new" | "grades" | "courses"; window?: number; limit?: number; query?: string | undefined; detail?: "concise" | "detailed" };
-export type SearchOptions = { query: string; courseId?: string | undefined; kinds?: Array<"assignment" | "material" | "announcement">; limit?: number; detail?: "concise" | "detailed" };
+export type OverviewOptions = { view?: "due" | "missing" | "new" | "grades" | "courses"; window?: number; limit?: number; query?: string | undefined; includeArchived?: boolean; detail?: "concise" | "detailed" };
+export type SearchOptions = { query: string; courseId?: string | undefined; kinds?: Array<"assignment" | "material" | "announcement">; includeArchived?: boolean; limit?: number; detail?: "concise" | "detailed" };
 
 export function dueToMillis(
   dueDate?: classroom_v1.Schema$Date | null,
@@ -39,6 +40,21 @@ export function trimText(text: string | null | undefined, max: number): string {
   const value = (text ?? "").trim().replace(/\s+/g, " ");
   if (value.length <= max) return value;
   return value.slice(0, max).trimEnd() + "…";
+}
+
+export type Trimmed = { value: string; status: "full" | "trimmed" | "empty" };
+
+export function trimWithStatus(text: string | null | undefined, max: number): Trimmed {
+  const value = (text ?? "").trim().replace(/\s+/g, " ");
+  if (!value) return { value: "", status: "empty" };
+  if (value.length <= max) return { value, status: "full" };
+  return { value: value.slice(0, max).trimEnd() + "…", status: "trimmed" };
+}
+
+function isDenied(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  const message = error instanceof Error ? error.message : String(error);
+  return code === 401 || code === 403 || /permission|denied|forbidden/i.test(message);
 }
 
 export function summarizeMaterial(m: classroom_v1.Schema$Material): string {
@@ -203,14 +219,14 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function wrapOverview(view: OverviewResult["view"], window: number, checkedCourses: number, total: number, items: Array<WorkRow | NewRow | CourseRow>, errors: PartialError[], steer?: string): OverviewResult {
+function wrapOverview(view: OverviewResult["view"], window: number, checkedCourses: number, skippedArchived: number, total: number, items: Array<WorkRow | NewRow | CourseRow>, errors: PartialError[], steer?: string): OverviewResult {
   const returned = items.length;
   const truncated = total > returned;
   const parts: string[] = [];
   if (truncated) parts.push(`Showing ${returned} of ${total}. Narrow with a smaller window, query="...", or a different view.`);
   if (steer) parts.push(steer);
   return {
-    view, window, checkedCourses, total, returned, truncated,
+    view, window, checkedCourses, skippedArchived, total, returned, truncated,
     hint: parts.length > 0 ? parts.join(" ") : null,
     errors,
     items,
@@ -225,14 +241,17 @@ export async function getOverview(services: GoogleServices, opts: OverviewOption
   const query = opts.query?.trim().toLowerCase() ?? "";
   const errors: PartialError[] = [];
 
+  const allCourses = await listCourses(services, { includeArchived: true });
+  const includeArchived = Boolean(opts.includeArchived) || view === "grades" || view === "courses";
+  const courses = includeArchived ? allCourses : allCourses.filter((c) => c.state === "ACTIVE");
+  const skippedArchived = allCourses.length - courses.length;
+
   if (view === "courses") {
-    const courses = await listCourses(services, { includeArchived: true });
     const matched = query ? courses.filter((c) => c.name.toLowerCase().includes(query)) : courses;
-    return wrapOverview(view, window, courses.length, matched.length, matched.slice(0, limit), errors);
+    return wrapOverview(view, window, courses.length, 0, matched.length, matched.slice(0, limit), errors);
   }
 
   if (view === "new") {
-    const courses = await listCourses(services, { includeArchived: false });
     const since = nowMillis - window * 86_400_000;
     const perCourse = await mapPool(courses, 5, async (course): Promise<NewRow[]> => {
       try {
@@ -260,10 +279,9 @@ export async function getOverview(services: GoogleServices, opts: OverviewOption
     const all = perCourse.flat().sort((a, b) => (Date.parse(b.updated ?? "") || 0) - (Date.parse(a.updated ?? "") || 0));
     const matched = query ? all.filter((r) => r.title.toLowerCase().includes(query) || r.course.toLowerCase().includes(query)) : all;
     if (errors.length > 0 && errors.length === courses.length && matched.length === 0) throw new Error(errors[0].message);
-    return wrapOverview(view, window, courses.length, matched.length, matched.slice(0, limit), errors);
+    return wrapOverview(view, window, courses.length, skippedArchived, matched.length, matched.slice(0, limit), errors);
   }
 
-  const courses = await listCourses(services, { includeArchived: view === "grades" });
   let missingCount = 0;
   const perCourse = await mapPool(courses, 5, async (course): Promise<WorkRow[]> => {
     try {
@@ -291,7 +309,7 @@ export async function getOverview(services: GoogleServices, opts: OverviewOption
   const steer = view === "due" && missingCount > 0
     ? `${missingCount} overdue/late item(s) are in view=missing.`
     : undefined;
-  return wrapOverview(view, window, courses.length, matched.length, matched.slice(0, limit), errors, steer);
+  return wrapOverview(view, window, courses.length, skippedArchived, matched.length, matched.slice(0, limit), errors, steer);
 }
 
 function mapCriterion(c: classroom_v1.Schema$Criterion): RubricCriterion {
@@ -329,25 +347,55 @@ export async function getAssignmentDetail(services: GoogleServices, courseId: st
   const sub = subs.data.studentSubmissions?.[0];
 
   let rubric: RubricCriterion[] | null = null;
+  let rubricStatus: AssignmentDetail["rubricStatus"] = "none";
   try {
     const response = await withRetry(`rubrics.list ${assignmentId}`, () => services.classroom.courses.courseWork.rubrics.list({ courseId, courseWorkId: assignmentId }));
     const criteria = response.data.rubrics?.[0]?.criteria;
-    if (criteria) rubric = criteria.map(mapCriterion);
-  } catch {
+    if (criteria && criteria.length > 0) {
+      rubric = criteria.map(mapCriterion);
+      rubricStatus = "present";
+    }
+  } catch (error) {
     rubric = null;
+    rubricStatus = isDenied(error) ? "denied" : "error";
   }
 
   let topic: string | null = null;
+  let topicStatus: AssignmentDetail["topicStatus"] = "none";
   const topicId = w.topicId;
   if (topicId) {
     try {
       const response = await withRetry(`topics.get ${topicId}`, () => services.classroom.courses.topics.get({ courseId, id: topicId }));
       topic = response.data.name ?? null;
-    } catch {
+      topicStatus = topic ? "present" : "none";
+    } catch (error) {
       topic = null;
+      topicStatus = isDenied(error) ? "denied" : "error";
     }
   }
 
+  let history: HistoryEntry[] | null = null;
+  let historyStatus: AssignmentDetail["historyStatus"] = "unavailable";
+  if (sub?.id) {
+    try {
+      const full = await withRetry(`submissions.get ${assignmentId}`, () => services.classroom.courses.courseWork.studentSubmissions.get({
+        courseId, courseWorkId: assignmentId, id: sub.id as string,
+      }));
+      const mapped = mapHistory(full.data.submissionHistory ?? sub.submissionHistory);
+      if (mapped) {
+        history = mapped;
+        historyStatus = mapped.length > 0 ? "present" : "none";
+      }
+    } catch {
+      const mapped = mapHistory(sub.submissionHistory);
+      if (mapped) {
+        history = mapped;
+        historyStatus = mapped.length > 0 ? "present" : "none";
+      }
+    }
+  }
+
+  const prompt = trimWithStatus(w.description, maxDescChars);
   const dueMillis = dueToMillis(w.dueDate, w.dueTime);
   return {
     courseId,
@@ -355,7 +403,8 @@ export async function getAssignmentDetail(services: GoogleServices, courseId: st
     id: assignmentId,
     title: trimText(w.title, 200),
     workType: w.workType ?? null,
-    prompt: trimText(w.description, maxDescChars),
+    prompt: prompt.value,
+    promptStatus: prompt.status,
     due: dueToDay(w.dueDate),
     daysLeft: dueMillis !== undefined ? daysUntil(dueMillis, nowMillis) : null,
     points: w.maxPoints ?? null,
@@ -364,10 +413,164 @@ export async function getAssignmentDetail(services: GoogleServices, courseId: st
     grade: sub?.assignedGrade ?? null,
     link: w.alternateLink ?? null,
     topic,
+    topicStatus,
     rubric,
+    rubricStatus,
     attachments: normalizeAttachments(w.materials ?? []),
     myAttachments: normalizeAttachments(sub?.assignmentSubmission?.attachments ?? []),
-    history: mapHistory(sub?.submissionHistory),
+    history,
+    historyStatus,
+  };
+}
+
+export async function getMaterialDetail(services: GoogleServices, courseId: string, courseName: string, materialId: string, maxDescChars = 2000): Promise<MaterialDetail> {
+  const response = await withRetry(`courseWorkMaterials.get ${materialId}`, () =>
+    services.classroom.courses.courseWorkMaterials.get({ courseId, id: materialId }));
+  const m = response.data;
+  const description = trimWithStatus(m.description, maxDescChars);
+  return {
+    kind: "material",
+    courseId,
+    course: courseName,
+    id: materialId,
+    title: trimText(m.title, 200),
+    description: description.value,
+    descriptionStatus: description.status,
+    attachments: normalizeAttachments(m.materials ?? []),
+    link: m.alternateLink ?? null,
+    created: m.creationTime ?? null,
+    updated: m.updateTime ?? null,
+  };
+}
+
+export async function getAnnouncementDetail(services: GoogleServices, courseId: string, courseName: string, announcementId: string, maxDescChars = 2000): Promise<AnnouncementDetail> {
+  const response = await withRetry(`announcements.get ${announcementId}`, () =>
+    services.classroom.courses.announcements.get({ courseId, id: announcementId }));
+  const a = response.data;
+  const text = trimWithStatus(a.text, maxDescChars);
+  return {
+    kind: "announcement",
+    courseId,
+    course: courseName,
+    id: announcementId,
+    text: text.value,
+    textStatus: text.status,
+    attachments: normalizeAttachments(a.materials ?? []),
+    link: a.alternateLink ?? null,
+    created: a.creationTime ?? null,
+    updated: a.updateTime ?? null,
+  };
+}
+
+const COURSE_DETAIL_CAP = 20;
+
+export async function getCourseDetail(services: GoogleServices, courseId: string, nowMillis = Date.now()): Promise<CourseDetail> {
+  const courses = await listCourses(services, { includeArchived: true });
+  const info = courses.find((c) => c.id === courseId);
+  if (!info) throw new Error(`No course with id "${courseId}".`);
+  const errors: PartialError[] = [];
+
+  const [workSubs, materialsRes, announcementsRes] = await Promise.all([
+    (async () => {
+      try {
+        const [work, subs] = await Promise.all([
+          withRetry(`courseWork.list ${courseId}`, () => services.classroom.courses.courseWork.list({
+            courseId, courseWorkStates: ["PUBLISHED"], orderBy: "dueDate asc", pageSize: 100,
+          })),
+          withRetry(`submissions.list ${courseId}`, () => services.classroom.courses.courseWork.studentSubmissions.list({
+            courseId, courseWorkId: "-", userId: "me", pageSize: 100,
+          })),
+        ]);
+        return {
+          work: work.data.courseWork ?? [],
+          subs: subs.data.studentSubmissions ?? [],
+        };
+      } catch (error) {
+        errors.push({ courseId, course: info.name, message: errorMessage(error) });
+        return { work: [], subs: [] };
+      }
+    })(),
+    (async () => {
+      try {
+        const response = await withRetry(`courseWorkMaterials.list ${courseId}`, () =>
+          services.classroom.courses.courseWorkMaterials.list({ courseId, pageSize: 100 }));
+        return response.data.courseWorkMaterial ?? [];
+      } catch (error) {
+        errors.push({ courseId, course: info.name, message: errorMessage(error) });
+        return [];
+      }
+    })(),
+    (async () => {
+      try {
+        const response = await withRetry(`announcements.list ${courseId}`, () =>
+          services.classroom.courses.announcements.list({ courseId, pageSize: 100 }));
+        return response.data.announcements ?? [];
+      } catch (error) {
+        errors.push({ courseId, course: info.name, message: errorMessage(error) });
+        return [];
+      }
+    })(),
+  ]);
+
+  let topics: Array<{ id: string; name: string }> | null = null;
+  let topicsStatus: CourseDetail["topicsStatus"] = "none";
+  try {
+    const response = await withRetry(`topics.list ${courseId}`, () => services.classroom.courses.topics.list({ courseId }));
+    const rows = (response.data.topic ?? [])
+      .filter((t): t is classroom_v1.Schema$Topic & { topicId: string } => Boolean(t?.topicId))
+      .map((t) => ({ id: t.topicId, name: t.name ?? "Unnamed" }));
+    topics = rows;
+    topicsStatus = rows.length > 0 ? "present" : "none";
+  } catch (error) {
+    topics = null;
+    topicsStatus = isDenied(error) ? "denied" : "error";
+  }
+
+  const courseRef = { id: info.id, name: info.name };
+  const openWork = buildWorkRows(courseRef, workSubs.work, workSubs.subs, "due", 365, nowMillis, "concise");
+  const missing = buildWorkRows(courseRef, workSubs.work, workSubs.subs, "missing", 365, nowMillis, "concise");
+
+  const materials: MaterialSummary[] = materialsRes.map((m) => ({
+    id: m.id ?? "",
+    title: trimText(m.title, 200),
+    attachments: normalizeAttachments(m.materials ?? []),
+    updated: m.updateTime ?? m.creationTime ?? null,
+    link: m.alternateLink ?? null,
+  })).filter((m) => m.id);
+
+  const announcements: AnnouncementSummary[] = announcementsRes.map((a) => ({
+    id: a.id ?? "",
+    text: trimText(a.text, 140),
+    attachments: normalizeAttachments(a.materials ?? []),
+    updated: a.updateTime ?? a.creationTime ?? null,
+    link: a.alternateLink ?? null,
+  })).filter((a) => a.id);
+
+  const totals = {
+    openWork: openWork.length,
+    missing: missing.length,
+    materials: materials.length,
+    announcements: announcements.length,
+  };
+  const truncatedMaterials = materials.length > COURSE_DETAIL_CAP;
+  const truncatedAnnouncements = announcements.length > COURSE_DETAIL_CAP;
+  return {
+    courseId: info.id,
+    course: info.name,
+    section: info.section,
+    state: info.state,
+    totals,
+    openWork,
+    missing,
+    materials: materials.slice(0, COURSE_DETAIL_CAP),
+    announcements: announcements.slice(0, COURSE_DETAIL_CAP),
+    topics,
+    topicsStatus,
+    truncated: truncatedMaterials || truncatedAnnouncements,
+    hint: truncatedMaterials || truncatedAnnouncements
+      ? `Showing the ${COURSE_DETAIL_CAP} most recent of ${truncatedMaterials ? totals.materials : 0} materials / ${truncatedAnnouncements ? totals.announcements : 0} announcements. Use search to reach older items.`
+      : null,
+    errors,
   };
 }
 
@@ -398,18 +601,21 @@ export async function searchEverything(services: GoogleServices, opts: SearchOpt
   const errors: PartialError[] = [];
 
   let courses: CourseRow[];
+  let skippedArchived = 0;
   if (opts.courseId) {
     const all = await listCourses(services, { includeArchived: true });
     courses = all.filter((c) => c.id === opts.courseId);
     if (courses.length === 0) {
       return {
-        query: opts.query, checkedCourses: 0, total: 0, returned: 0, truncated: false, hint: null,
+        query: opts.query, checkedCourses: 0, skippedArchived: 0, total: 0, returned: 0, truncated: false, hint: null,
         errors: [{ courseId: opts.courseId, course: null, message: `No course with id "${opts.courseId}".` }],
         hits: [],
       };
     }
   } else {
-    courses = await listCourses(services, { includeArchived: false });
+    const all = await listCourses(services, { includeArchived: true });
+    courses = opts.includeArchived ? all : all.filter((c) => c.state === "ACTIVE");
+    skippedArchived = all.length - courses.length;
   }
 
   const perCourse = await mapPool(courses, 5, async (course): Promise<SearchHit[]> => {
@@ -443,6 +649,7 @@ export async function searchEverything(services: GoogleServices, opts: SearchOpt
             myState: sub?.state ?? "NEW",
             snippet: makeSnippet(body, tokens),
             updated: w.updateTime ?? w.creationTime ?? null,
+            attachments: normalizeAttachments(w.materials ?? []),
           };
           if (detail === "detailed") hit.link = w.alternateLink ?? undefined;
           hits.push(hit);
@@ -459,6 +666,7 @@ export async function searchEverything(services: GoogleServices, opts: SearchOpt
             due: null, daysLeft: null, myState: null,
             snippet: makeSnippet(body, tokens),
             updated: m.updateTime ?? m.creationTime ?? null,
+            attachments: normalizeAttachments(m.materials ?? []),
           };
           if (detail === "detailed") hit.link = m.alternateLink ?? undefined;
           hits.push(hit);
@@ -475,6 +683,7 @@ export async function searchEverything(services: GoogleServices, opts: SearchOpt
             due: null, daysLeft: null, myState: null,
             snippet: makeSnippet(body, tokens),
             updated: a.updateTime ?? a.creationTime ?? null,
+            attachments: normalizeAttachments(a.materials ?? []),
           };
           if (detail === "detailed") hit.link = a.alternateLink ?? undefined;
           hits.push(hit);
@@ -494,6 +703,7 @@ export async function searchEverything(services: GoogleServices, opts: SearchOpt
   return {
     query: opts.query,
     checkedCourses: courses.length,
+    skippedArchived,
     total,
     returned: hits.length,
     truncated,

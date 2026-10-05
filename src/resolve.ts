@@ -4,8 +4,12 @@ import { listCourses } from "./digest.js";
 
 export type CourseRef = { courseId?: string | undefined; course?: string | undefined };
 export type AssignmentRef = { assignmentId?: string | undefined; assignment?: string | undefined };
+export type MaterialRef = { materialId?: string | undefined; material?: string | undefined };
+export type AnnouncementRef = { announcementId?: string | undefined; announcement?: string | undefined };
 export type CourseInfo = { id: string; name: string; section: string | null; state: string | null };
 export type WorkInfo = { id: string; courseId: string; title: string; workType: string | null };
+export type MaterialInfo = { id: string; courseId: string; title: string };
+export type AnnouncementInfo = { id: string; courseId: string; title: string };
 export type Resolution<T> = { ok: true; item: T } | { ok: false; message: string };
 
 const KNOWN_LIMIT = 10;
@@ -75,4 +79,44 @@ export async function resolveAssignment(services: GoogleServices, courseId: stri
   const found = pickOne(items, { id: ref.assignmentId, name: ref.assignment }, "assignment");
   if (!found.ok) return found;
   return { ok: true, item: { id: found.item.id, courseId, title: found.item.name, workType: found.item.workType } };
+}
+
+export async function resolveMaterial(services: GoogleServices, courseId: string, ref: MaterialRef): Promise<Resolution<MaterialInfo>> {
+  const items: Array<{ id: string; name: string }> = [];
+  let pageToken: string | undefined;
+  for (let page = 0; page < 3; page++) {
+    const response = await withRetry(`courseWorkMaterials.list ${courseId}`, () => services.classroom.courses.courseWorkMaterials.list({
+      courseId,
+      pageSize: 100,
+      pageToken,
+    }));
+    for (const m of response.data.courseWorkMaterial ?? []) {
+      if (m.id) items.push({ id: m.id, name: m.title ?? "Untitled" });
+    }
+    pageToken = response.data.nextPageToken ?? undefined;
+    if (!pageToken) break;
+  }
+  const found = pickOne(items, { id: ref.materialId, name: ref.material }, "material");
+  if (!found.ok) return found;
+  return { ok: true, item: { id: found.item.id, courseId, title: found.item.name } };
+}
+
+export async function resolveAnnouncement(services: GoogleServices, courseId: string, ref: AnnouncementRef): Promise<Resolution<AnnouncementInfo>> {
+  const items: Array<{ id: string; name: string }> = [];
+  let pageToken: string | undefined;
+  for (let page = 0; page < 3; page++) {
+    const response = await withRetry(`announcements.list ${courseId}`, () => services.classroom.courses.announcements.list({
+      courseId,
+      pageSize: 100,
+      pageToken,
+    }));
+    for (const a of response.data.announcements ?? []) {
+      if (a.id) items.push({ id: a.id, name: (a.text ?? "Untitled").slice(0, 200) });
+    }
+    pageToken = response.data.nextPageToken ?? undefined;
+    if (!pageToken) break;
+  }
+  const found = pickOne(items, { id: ref.announcementId, name: ref.announcement }, "announcement");
+  if (!found.ok) return found;
+  return { ok: true, item: { id: found.item.id, courseId, title: found.item.name } };
 }

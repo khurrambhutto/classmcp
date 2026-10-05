@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { Readable } from "node:stream";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { GoogleServices } from "./google.js";
@@ -34,14 +38,15 @@ function makeServices(overrides: { denyWrites?: boolean } = {}) {
       },
     ],
     c2: [{ id: "w3", title: "Midterm notes", description: "Reading list.", state: "PUBLISHED", workType: "ASSIGNMENT", maxPoints: 10, updateTime: new Date().toISOString() }],
-    c3: [],
+    c3: [{ id: "w4", title: "Archived task", description: "Old work.", state: "PUBLISHED", workType: "ASSIGNMENT", maxPoints: 10, dueDate: datePlus(2), updateTime: new Date().toISOString() }],
   };
   const subs: Record<string, unknown[]> = {
     c1: [
-      { courseWorkId: "w1", state: "CREATED", late: false, assignmentSubmission: { attachments: [{ driveFile: { id: "d1", title: "notes.pdf" } }] } },
+      { id: "s1", courseWorkId: "w1", state: "CREATED", late: false, assignmentSubmission: { attachments: [{ driveFile: { id: "d1", title: "notes.pdf" } }] } },
       { courseWorkId: "w2", state: "TURNED_IN", late: false },
     ],
-    c2: [], c3: [],
+    c2: [],
+    c3: [{ id: "s4", courseWorkId: "w4", state: "CREATED", late: false }],
   };
   const modifyAttachments = vi.fn(async () => {
     if (overrides.denyWrites !== false) throw PROJECT_DENIED;
@@ -67,20 +72,36 @@ function makeServices(overrides: { denyWrites?: boolean } = {}) {
           rubrics: { list: vi.fn(async () => ({ data: {} })) },
           studentSubmissions: {
             list: vi.fn(async (params: { courseId: string }) => ({ data: { studentSubmissions: subs[params.courseId] ?? [] } })),
+            get: vi.fn(async () => ({ data: { submissionHistory: [{ stateHistory: { state: "CREATED", stateTimestamp: "2026-09-01T00:00:00Z" } }] } })),
             modifyAttachments,
             turnIn,
           },
         },
-        topics: { get: vi.fn(async () => ({ data: { name: "Unit 1" } })) },
-        courseWorkMaterials: { list: vi.fn(async (params: { courseId: string }) => ({ data: { courseWorkMaterial: params.courseId === "c1" ? [{ id: "m1", title: "Slides", updateTime: new Date().toISOString() }] : [] } })) },
-        announcements: { list: vi.fn(async () => ({ data: { announcements: [] } })) },
+        topics: {
+          get: vi.fn(async () => ({ data: { topicId: "t-opic", name: "Unit 1" } })),
+          list: vi.fn(async () => ({ data: { topic: [{ topicId: "t-opic", name: "Unit 1" }] } })),
+        },
+        courseWorkMaterials: {
+          list: vi.fn(async (params: { courseId: string }) => ({ data: { courseWorkMaterial: params.courseId === "c1" ? [{ id: "m1", title: "Slides", description: "Chapter 1 slides about waves", materials: [{ driveFile: { driveFile: { id: "t9", title: "slides.pdf" } } }], updateTime: new Date().toISOString(), alternateLink: "https://classroom.google.com/c/c1/m1" }] : [] } })),
+          get: vi.fn(async (params: { id: string }) => {
+            if (params.id !== "m1") throw new Error("Requested entity was not found.");
+            return { data: { id: "m1", title: "Slides", description: "Chapter 1 slides about waves", materials: [{ driveFile: { driveFile: { id: "t9", title: "slides.pdf" } } }], updateTime: new Date().toISOString(), creationTime: new Date().toISOString(), alternateLink: "https://classroom.google.com/c/c1/m1" } };
+          }),
+        },
+        announcements: {
+          list: vi.fn(async (params: { courseId: string }) => ({ data: { announcements: params.courseId === "c1" ? [{ id: "a1", text: "Exam on Friday", materials: [], updateTime: new Date().toISOString(), alternateLink: "https://classroom.google.com/c/c1/a1" }] : [] } })),
+          get: vi.fn(async (params: { id: string }) => {
+            if (params.id !== "a1") throw new Error("Requested entity was not found.");
+            return { data: { id: "a1", text: "Exam on Friday", materials: [], updateTime: new Date().toISOString(), creationTime: new Date().toISOString(), alternateLink: "https://classroom.google.com/c/c1/a1" } };
+          }),
+        },
       },
     },
     drive: {
       files: {
         get: vi.fn(async (params: { fileId: string; alt?: string }) => {
-          if (params.alt === "media") return { data: Buffer.from("x") };
-          return { data: { id: params.fileId, name: "handout.pdf", mimeType: "application/pdf", size: "3" } };
+          if (params.alt === "media") return { data: Readable.from(["x"]) };
+          return { data: { id: params.fileId, name: `${params.fileId}.bin`, mimeType: "application/pdf", size: "3" } };
         }),
         export: vi.fn(async () => ({ data: Buffer.from("x") })),
         create: vi.fn(async () => ({ data: { id: "u1", name: "essay.docx", webViewLink: "https://drive.google.com/file/u1", size: "9" } })),
@@ -97,7 +118,7 @@ async function connected(overrides: { denyWrites?: boolean } = {}) {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "test-client", version: "0.0.0" });
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
-  return { client, modifyAttachments, turnIn };
+  return { client, services, modifyAttachments, turnIn };
 }
 
 function textOf(result: unknown): string {
@@ -220,5 +241,165 @@ describe("buildServer", () => {
     const message = await expectFailure(client, "download_files", { fileIds: ["d1"], destinationDir: "/etc" });
     expect(message).toMatch(/must stay inside/);
     expect(message).toMatch(/CLASSMCP_WORKDIR/);
+  });
+
+  it("get_overview surfaces skippedArchived and includeArchived scans archived courses", async () => {
+    const { client } = await connected();
+    const activeOnly = structuredOf(await client.callTool({ name: "get_overview", arguments: { view: "due", window: 7 } }));
+    expect(activeOnly.skippedArchived).toBe(1);
+    expect((activeOnly.items as Array<{ id: string }>).map((item) => item.id)).not.toContain("w4");
+
+    const withArchived = structuredOf(await client.callTool({ name: "get_overview", arguments: { view: "due", window: 7, includeArchived: true } }));
+    expect(withArchived.skippedArchived).toBe(0);
+    expect((withArchived.items as Array<{ id: string }>).map((item) => item.id)).toContain("w4");
+  });
+
+  it("search hits carry attachment Drive ids so materials are downloadable", async () => {
+    const { client } = await connected();
+    const data = structuredOf(await client.callTool({ name: "search", arguments: { query: "slides" } })) as { hits: Array<Record<string, unknown>> };
+    expect(data.hits).toHaveLength(1);
+    const hit = data.hits[0];
+    expect(hit.kind).toBe("material");
+    expect(hit.id).toBe("m1");
+    expect((hit.attachments as Array<{ id: string | null }>)[0].id).toBe("t9");
+  });
+
+  it("material resource reads any material a search can return", async () => {
+    const { client } = await connected();
+    const result = await client.readResource({ uri: "classroom://courses/c1/materials/m1" });
+    const body = JSON.parse((result.contents[0] as { text: string }).text);
+    expect(body).toMatchObject({ kind: "material", courseId: "c1", id: "m1", descriptionStatus: "full" });
+    expect(body.description).toContain("Chapter 1 slides");
+    expect(body.attachments[0]).toMatchObject({ kind: "driveFile", id: "t9" });
+  });
+
+  it("announcement resource reads any announcement a search can return", async () => {
+    const { client } = await connected();
+    const result = await client.readResource({ uri: "classroom://courses/c1/announcements/a1" });
+    const body = JSON.parse((result.contents[0] as { text: string }).text);
+    expect(body).toMatchObject({ kind: "announcement", courseId: "c1", id: "a1", text: "Exam on Friday", textStatus: "full" });
+  });
+
+  it("course resource lists materials and announcements, not just open work", async () => {
+    const { client } = await connected();
+    const result = await client.readResource({ uri: "classroom://courses/c1" });
+    const body = JSON.parse((result.contents[0] as { text: string }).text);
+    expect(body.totals).toMatchObject({ materials: 1, announcements: 1 });
+    expect(body.materials[0]).toMatchObject({ id: "m1" });
+    expect(body.materials[0].attachments[0].id).toBe("t9");
+    expect(body.announcements[0]).toMatchObject({ id: "a1" });
+    expect(body.topicsStatus).toBe("present");
+    expect(body.openWork.length + body.missing.length).toBeGreaterThan(0);
+  });
+
+  it("get_assignment emits reason codes instead of bare nulls", async () => {
+    const { client } = await connected();
+    const data = structuredOf(await client.callTool({ name: "get_assignment", arguments: { courseId: "c1", assignmentId: "w1" } }));
+    expect(data.promptStatus).toBe("full");
+    expect(data.rubricStatus).toBe("none");
+    expect(data.topicStatus).toBe("none");
+    expect(data.historyStatus).toBe("present");
+    expect((data.history as Array<{ state: string }>)[0].state).toBe("CREATED");
+  });
+
+  async function tempDownloadDir(): Promise<string> {
+    const dir = path.join(os.homedir(), "Downloads", `classmcp-test-${process.pid}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`);
+    await fs.mkdir(dir, { recursive: true });
+    return dir;
+  }
+
+  function fetchedIds(services: GoogleServices): string[] {
+    const get = services.drive.files.get as unknown as { mock: { calls: Array<[Record<string, unknown>]> } };
+    return get.mock.calls.map((call) => String((call[0] as { fileId: string }).fileId));
+  }
+
+  it("download_files with courseId + fileIds and no assignment downloads exactly those files", async () => {
+    const { client, services } = await connected();
+    const dest = await tempDownloadDir();
+    try {
+      const result = await client.callTool({ name: "download_files", arguments: { courseId: "c1", fileIds: ["f1", "f2"], destinationDir: dest } });
+      const data = structuredOf(result) as { saved: Array<{ path: string | null; error: string | null }>; savedCount: number; failedCount: number };
+      expect(data.savedCount).toBe(2);
+      expect(data.failedCount).toBe(0);
+      expect(data.saved).toHaveLength(2);
+      for (const entry of data.saved) {
+        expect(entry.error).toBeNull();
+        expect(entry.path?.startsWith(dest)).toBe(true);
+      }
+      const fetched = fetchedIds(services);
+      expect(fetched).toContain("f1");
+      expect(fetched).toContain("f2");
+    } finally {
+      await fs.rm(dest, { recursive: true, force: true });
+    }
+  });
+
+  it("download_files resolves materialId and downloads its attachments", async () => {
+    const { client } = await connected();
+    const dest = await tempDownloadDir();
+    try {
+      const result = await client.callTool({ name: "download_files", arguments: { courseId: "c1", materialId: "m1", destinationDir: dest } });
+      const data = structuredOf(result) as { saved: Array<{ name: string; error: string | null }>; savedCount: number; failedCount: number };
+      expect(data.savedCount).toBe(1);
+      expect(data.failedCount).toBe(0);
+      expect(data.saved[0].name).toBe("slides.pdf");
+      expect(data.saved[0].error).toBeNull();
+    } finally {
+      await fs.rm(dest, { recursive: true, force: true });
+    }
+  });
+
+  it("download_files falls back to materials when a material id or title is passed as assignment", async () => {
+    const { client } = await connected();
+    const dest = await tempDownloadDir();
+    try {
+      const byId = structuredOf(await client.callTool({ name: "download_files", arguments: { courseId: "c1", assignmentId: "m1", destinationDir: dest } })) as { savedCount: number; saved: Array<{ name: string }> };
+      expect(byId.savedCount).toBe(1);
+      expect(byId.saved[0].name).toBe("slides.pdf");
+      const byTitle = structuredOf(await client.callTool({ name: "download_files", arguments: { courseId: "c1", assignment: "Slides", destinationDir: dest } })) as { savedCount: number; saved: Array<{ name: string }> };
+      expect(byTitle.savedCount).toBe(1);
+      expect(byTitle.saved[0].name).toBe("slides.pdf");
+    } finally {
+      await fs.rm(dest, { recursive: true, force: true });
+    }
+  });
+
+  it("download_files treats fileIds as an exclusive filter over the scoped item", async () => {
+    const { client, services } = await connected();
+    const dest = await tempDownloadDir();
+    try {
+      // w1 carries t1 (teacher) + d1 (mine); requesting only t1 must not fetch d1.
+      const result = await client.callTool({ name: "download_files", arguments: { courseId: "c1", assignmentId: "w1", fileIds: ["t1"], destinationDir: dest } });
+      const data = structuredOf(result) as { saved: Array<{ name: string; error: string | null }>; savedCount: number; failedCount: number };
+      expect(data.saved).toHaveLength(1);
+      expect(data.savedCount).toBe(1);
+      expect(data.failedCount).toBe(0);
+      expect(data.saved[0].name).toBe("handout.pdf");
+      const fetched = fetchedIds(services);
+      expect(fetched).toContain("t1");
+      expect(fetched).not.toContain("d1");
+    } finally {
+      await fs.rm(dest, { recursive: true, force: true });
+    }
+  });
+
+  it("download_files without fileIds downloads every attachment of the scoped assignment", async () => {
+    const { client } = await connected();
+    const dest = await tempDownloadDir();
+    try {
+      const result = await client.callTool({ name: "download_files", arguments: { courseId: "c1", assignmentId: "w1", destinationDir: dest } });
+      const data = structuredOf(result) as { saved: Array<{ name: string; error: string | null }>; savedCount: number; failedCount: number };
+      expect(data.savedCount).toBe(2);
+      expect(data.failedCount).toBe(0);
+      expect(data.saved.map((s) => s.name).sort()).toEqual(["handout.pdf", "notes.pdf"]);
+    } finally {
+      await fs.rm(dest, { recursive: true, force: true });
+    }
+  });
+
+  it("download_files rejects more than one item kind", async () => {
+    const { client } = await connected();
+    const message = await expectFailure(client, "download_files", { courseId: "c1", assignmentId: "w1", materialId: "m1", fileIds: ["t1"] });
+    expect(message).toMatch(/only one of assignment, material, or announcement/);
   });
 });

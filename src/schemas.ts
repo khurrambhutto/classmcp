@@ -13,6 +13,16 @@ export const AssignmentRefShape = {
   assignment: z.string().optional().describe("Assignment title or fragment. Fuzzy-matched within the course; use assignmentId when ambiguous."),
 };
 
+export const MaterialRefShape = {
+  materialId: z.string().optional().describe("Course material id (from search kinds=[\"material\"]). Mutually exclusive with material. Pass only one of assignment, material, or announcement."),
+  material: z.string().optional().describe("Material title or fragment. Fuzzy-matched within the course; use materialId when ambiguous."),
+};
+
+export const AnnouncementRefShape = {
+  announcementId: z.string().optional().describe("Announcement id (from search kinds=[\"announcement\"]). Mutually exclusive with announcement. Pass only one of assignment, material, or announcement."),
+  announcement: z.string().optional().describe("Announcement text fragment. Fuzzy-matched within the course; use announcementId when ambiguous."),
+};
+
 export const DetailShape = z
   .enum(["concise", "detailed"])
   .default("concise")
@@ -71,7 +81,8 @@ export const PartialErrorSchema = z.object({
 export const OverviewResultSchema = z.object({
   view: z.enum(["due", "missing", "new", "grades", "courses"]),
   window: z.number(),
-  checkedCourses: z.number(),
+  checkedCourses: z.number().describe("Courses actually scanned."),
+  skippedArchived: z.number().describe("Non-ACTIVE courses not scanned (0 when included)."),
   total: z.number().describe("Matches after query filtering, before limit."),
   returned: z.number(),
   truncated: z.boolean(),
@@ -98,6 +109,7 @@ export const AssignmentDetailSchema = z.object({
   title: z.string(),
   workType: z.string().nullable(),
   prompt: z.string().describe("Description, whitespace-collapsed and truncated to maxDescChars."),
+  promptStatus: z.enum(["full", "trimmed", "empty"]).describe("Why prompt looks the way it does."),
   due: z.string().nullable(),
   daysLeft: z.number().nullable(),
   points: z.number().nullable(),
@@ -106,10 +118,13 @@ export const AssignmentDetailSchema = z.object({
   grade: z.number().nullable(),
   link: z.string().nullable(),
   topic: z.string().nullable(),
-  rubric: z.array(RubricCriterionSchema).nullable().describe("Null when no rubric is attached or the API denies it."),
+  topicStatus: z.enum(["present", "none", "denied", "error"]),
+  rubric: z.array(RubricCriterionSchema).nullable().describe("Null unless rubricStatus is \"present\"."),
+  rubricStatus: z.enum(["present", "none", "denied", "error"]).describe("none = no rubric attached; denied/error = could not read it."),
   attachments: z.array(AttachmentSchema).describe("Teacher attachments/handouts; driveFile ids work with download_files."),
   myAttachments: z.array(AttachmentSchema).describe("Files/links currently on the student's submission."),
-  history: z.array(HistoryEntrySchema).nullable().describe("Latest submission state transitions, oldest first (max 5)."),
+  history: z.array(HistoryEntrySchema).nullable().describe("Latest submission state transitions, oldest first (max 5). Null unless historyStatus is \"present\"/\"none\"."),
+  historyStatus: z.enum(["present", "none", "unavailable"]).describe("none = no transitions yet; unavailable = the API did not return history."),
 });
 
 export const SearchHitSchema = z.object({
@@ -123,18 +138,85 @@ export const SearchHitSchema = z.object({
   myState: z.string().nullable(),
   snippet: z.string().nullable().describe("Match context from description/body, trimmed."),
   updated: z.string().nullable(),
+  attachments: z.array(AttachmentSchema).describe("Normalized attachments with Drive ids — pass ids to download_files."),
   link: z.string().optional(),
 });
 
 export const SearchResultSchema = z.object({
   query: z.string(),
   checkedCourses: z.number(),
+  skippedArchived: z.number().describe("Non-ACTIVE courses not scanned (0 when included)."),
   total: z.number(),
   returned: z.number(),
   truncated: z.boolean(),
   hint: z.string().nullable(),
   errors: z.array(PartialErrorSchema),
   hits: z.array(SearchHitSchema),
+});
+
+export const MaterialSummarySchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  attachments: z.array(AttachmentSchema),
+  updated: z.string().nullable(),
+  link: z.string().nullable(),
+});
+
+export const MaterialDetailSchema = z.object({
+  kind: z.literal("material"),
+  courseId: z.string(),
+  course: z.string(),
+  id: z.string(),
+  title: z.string(),
+  description: z.string().describe("Whitespace-collapsed and truncated to maxDescChars."),
+  descriptionStatus: z.enum(["full", "trimmed", "empty"]),
+  attachments: z.array(AttachmentSchema).describe("driveFile ids work with download_files."),
+  link: z.string().nullable(),
+  created: z.string().nullable(),
+  updated: z.string().nullable(),
+});
+
+export const AnnouncementSummarySchema = z.object({
+  id: z.string(),
+  text: z.string().describe("Trimmed to 140 chars."),
+  attachments: z.array(AttachmentSchema),
+  updated: z.string().nullable(),
+  link: z.string().nullable(),
+});
+
+export const AnnouncementDetailSchema = z.object({
+  kind: z.literal("announcement"),
+  courseId: z.string(),
+  course: z.string(),
+  id: z.string(),
+  text: z.string().describe("Whitespace-collapsed and truncated to maxDescChars."),
+  textStatus: z.enum(["full", "trimmed", "empty"]),
+  attachments: z.array(AttachmentSchema),
+  link: z.string().nullable(),
+  created: z.string().nullable(),
+  updated: z.string().nullable(),
+});
+
+export const CourseDetailSchema = z.object({
+  courseId: z.string(),
+  course: z.string(),
+  section: z.string().nullable(),
+  state: z.string().nullable(),
+  totals: z.object({
+    openWork: z.number(),
+    missing: z.number(),
+    materials: z.number(),
+    announcements: z.number(),
+  }),
+  openWork: z.array(WorkRowSchema).describe("Upcoming open work in this course."),
+  missing: z.array(WorkRowSchema).describe("Overdue/late open work in this course."),
+  materials: z.array(MaterialSummarySchema).describe("Most recent 20 materials with attachments."),
+  announcements: z.array(AnnouncementSummarySchema).describe("Most recent 20 announcements."),
+  topics: z.array(z.object({ id: z.string(), name: z.string() })).nullable().describe("Null unless topicsStatus is \"present\"/\"none\"."),
+  topicsStatus: z.enum(["present", "none", "denied", "error"]),
+  truncated: z.boolean(),
+  hint: z.string().nullable(),
+  errors: z.array(PartialErrorSchema),
 });
 
 export const SavedFileSchema = z.object({
@@ -186,6 +268,7 @@ export const OverviewInputShape = {
   window: z.number().min(1).max(30).default(7).describe("Days: due horizon and new-since. 1-30, default 7."),
   limit: z.number().min(1).max(50).default(20).describe("Max rows returned. 1-50, default 20."),
   query: z.string().max(120).optional().describe("Case-insensitive filter on title/course name."),
+  includeArchived: z.boolean().default(false).describe("Also scan ARCHIVED courses (due/missing/new/grades default to ACTIVE only; the result reports skippedArchived)."),
   detail: DetailShape,
 };
 
@@ -200,6 +283,7 @@ export const SearchInputShape = {
   ...CourseRefShape,
   kinds: z.array(z.enum(["assignment", "material", "announcement"])).max(3).optional()
     .describe("Restrict kinds; default all three."),
+  includeArchived: z.boolean().default(false).describe("Also scan ARCHIVED courses (result reports skippedArchived)."),
   limit: z.number().min(1).max(30).default(10).describe("Max hits. 1-30, default 10."),
   detail: DetailShape,
 };
@@ -207,8 +291,10 @@ export const SearchInputShape = {
 export const DownloadInputShape = {
   ...CourseRefShape,
   ...AssignmentRefShape,
-  fileIds: z.array(z.string()).max(20).optional().describe("Download only these Drive files instead of every attachment. Max 20."),
-  destinationDir: z.string().optional().describe("Must resolve inside ~/Downloads or $CLASSMCP_WORKDIR. Default: <root>/classmcp."),
+  ...MaterialRefShape,
+  ...AnnouncementRefShape,
+  fileIds: z.array(z.string()).max(20).optional().describe("Download only these Drive files instead of every attachment. When present, only these files are downloaded (the scoped item's other attachments are skipped). Max 20."),
+  destinationDir: z.string().optional().describe("Must resolve inside ~/Downloads or $CLASSMCP_WORKDIR. Default: <root>/classmcp. CLASSMCP_WORKDIR must be exported in the MCP server's environment config (setting it per call does nothing)."),
   exportAs: z.enum(["pdf", "docx", "xlsx", "pptx"]).optional().describe("Format for Google Docs/Slides/Sheets. Defaults: docx/xlsx/pptx."),
 };
 
@@ -235,6 +321,11 @@ export type AssignmentDetail = z.infer<typeof AssignmentDetailSchema>;
 export type RubricCriterion = z.infer<typeof RubricCriterionSchema>;
 export type SearchHit = z.infer<typeof SearchHitSchema>;
 export type SearchResult = z.infer<typeof SearchResultSchema>;
+export type MaterialSummary = z.infer<typeof MaterialSummarySchema>;
+export type MaterialDetail = z.infer<typeof MaterialDetailSchema>;
+export type AnnouncementSummary = z.infer<typeof AnnouncementSummarySchema>;
+export type AnnouncementDetail = z.infer<typeof AnnouncementDetailSchema>;
+export type CourseDetail = z.infer<typeof CourseDetailSchema>;
 export type SavedFile = z.infer<typeof SavedFileSchema>;
 export type DownloadResult = z.infer<typeof DownloadResultSchema>;
 export type UploadedFile = z.infer<typeof UploadedFileSchema>;
