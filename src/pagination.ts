@@ -16,10 +16,20 @@ export type ScanOptions = {
   maxItems?: number;
   /** Safety budget for pages fetched, per list. Default 10. */
   maxPages?: number;
+  /** Cooperative cancellation: checked before every page. */
+  signal?: AbortSignal | undefined;
 };
 
 export const DEFAULT_SCAN_MAX_ITEMS = 1000;
 export const DEFAULT_SCAN_MAX_PAGES = 10;
+
+/** Thrown when an MCP host cancels the request mid-scan. */
+export class CancelledError extends Error {
+  constructor() {
+    super("Request cancelled by the MCP host.");
+    this.name = "CancelledError";
+  }
+}
 
 /**
  * Fetch every page of a list until the API stops returning a next page token
@@ -36,6 +46,7 @@ export async function scanAll<T>(
   let pageToken: string | undefined;
   let pages = 0;
   for (;;) {
+    if (opts.signal?.aborted) throw new CancelledError();
     const page = await fetchPage(pageToken, pages);
     pages++;
     items.push(...page.items);

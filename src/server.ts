@@ -1,6 +1,7 @@
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { createServices, withRetry } from "./google.js";
+import { VERSION } from "./version.js";
 import {
   getOverview,
   getAssignmentDetail,
@@ -55,7 +56,7 @@ function isProjectDenied(error: unknown): boolean {
 const READ_ONLY = { readOnlyHint: true, idempotentHint: true } as const;
 
 export function buildServer(getServices: () => Promise<Services>): McpServer {
-  const server = new McpServer({ name: "classmcp", version: "0.2.0" }, {
+  const server = new McpServer({ name: "classmcp", version: VERSION }, {
     instructions:
       "Student-side Google Classroom. Start with get_overview (due/missing/new/grades/courses); drill into get_assignment; " +
       "find items with search; fetch handouts with download_files; submit_work uploads to Drive and, when Google blocks " +
@@ -78,10 +79,10 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
     inputSchema: OverviewInputShape,
     outputSchema: OverviewResultSchema,
     annotations: READ_ONLY,
-  }, async (args) => {
+  }, async (args, extra) => {
     try {
       const services = await getServices();
-      return ok(await getOverview(services, args));
+      return ok(await getOverview(services, { ...args, signal: extra?.signal }));
     } catch (error) { return fail(error); }
   });
 
@@ -117,7 +118,7 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
     inputSchema: SearchInputShape,
     outputSchema: SearchResultSchema,
     annotations: READ_ONLY,
-  }, async ({ query, courseId, course, kinds, includeArchived, limit, detail }) => {
+  }, async ({ query, courseId, course, kinds, includeArchived, limit, detail }, extra) => {
     try {
       const services = await getServices();
       let scopedCourseId: string | undefined;
@@ -127,7 +128,7 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
         scopedCourseId = courseRes.item.id;
       }
       return ok(await searchEverything(services, {
-        query, courseId: scopedCourseId, kinds, includeArchived, limit, detail,
+        query, courseId: scopedCourseId, kinds, includeArchived, limit, detail, signal: extra?.signal,
       }));
     } catch (error) { return fail(error); }
   });
@@ -145,7 +146,7 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
     inputSchema: DownloadInputShape,
     outputSchema: DownloadResultSchema,
     annotations: { readOnlyHint: false, idempotentHint: true, openWorldHint: true },
-  }, async ({ courseId, course, assignmentId, assignment, materialId, material, announcementId, announcement, fileIds, destinationDir, exportAs }) => {
+  }, async ({ courseId, course, assignmentId, assignment, materialId, material, announcementId, announcement, fileIds, destinationDir, exportAs }, extra) => {
     try {
       const services = await getServices();
       const hasAssignmentRef = Boolean(assignmentId || assignment);
@@ -239,7 +240,7 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
           ? "No attachments found on the scoped item. Pass fileIds to download specific Drive files."
           : "Provide an assignment, material, or announcement (course + item) or fileIds to download."));
       }
-      return ok(await downloadMany(services.drive, items, { destinationDir, exportAs }));
+      return ok(await downloadMany(services.drive, items, { destinationDir, exportAs, signal: extra?.signal }));
     } catch (error) { return fail(error); }
   });
 
@@ -255,7 +256,7 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
     inputSchema: SubmitInputShape,
     outputSchema: SubmitResultSchema,
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
-  }, async ({ courseId, course, assignmentId, assignment, files, fileIds, link, turnIn, confirmTurnIn }) => {
+  }, async ({ courseId, course, assignmentId, assignment, files, fileIds, link, turnIn, confirmTurnIn }, extra) => {
     try {
       const services = await getServices();
       if (turnIn && confirmTurnIn !== "I confirm turn in") {
@@ -276,7 +277,7 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
       const requestedLink = link ? [{ link: { url: link.url, ...(link.title ? { title: link.title } : {}) } }] : [];
       const warnings: string[] = [];
 
-      const uploaded = requestedFiles.length > 0 ? await uploadLocalFiles(services.drive, requestedFiles) : [];
+      const uploaded = requestedFiles.length > 0 ? await uploadLocalFiles(services.drive, requestedFiles, undefined, extra?.signal) : [];
       const uploadsSucceeded = uploaded.filter((item) => item.id !== null && item.error === null);
       const uploadsFailed = uploaded.length - uploadsSucceeded.length;
       for (const item of uploaded) {
@@ -307,11 +308,11 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
       if (addAttachments.length > 0 && uploadsFailed === 0) {
         attachmentAttempted = true;
         try {
-          await withRetry(`modifyAttachments ${work.id}`, () =>
-            services.classroom.courses.courseWork.studentSubmissions.modifyAttachments({
-              courseId: courseRes.item.id, courseWorkId: work.id, id: "me",
-              requestBody: { addAttachments },
-            }));
+          // No retry: modifying submissions is non-idempotent.
+          await services.classroom.courses.courseWork.studentSubmissions.modifyAttachments({
+            courseId: courseRes.item.id, courseWorkId: work.id, id: "me",
+            requestBody: { addAttachments },
+          });
           attached = true;
           attachedCount = addAttachments.length;
         } catch (error) {
@@ -329,10 +330,10 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
       if (turnIn && turnInSkippedReason === null) {
         turnInAttempted = true;
         try {
-          await withRetry(`turnIn ${work.id}`, () =>
-            services.classroom.courses.courseWork.studentSubmissions.turnIn({
-              courseId: courseRes.item.id, courseWorkId: work.id, id: "me", requestBody: {},
-            }));
+          // No retry: turning in is non-idempotent.
+          await services.classroom.courses.courseWork.studentSubmissions.turnIn({
+            courseId: courseRes.item.id, courseWorkId: work.id, id: "me", requestBody: {},
+          });
           turnedIn = true;
         } catch (error) {
           if (isProjectDenied(error)) {
@@ -433,12 +434,12 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
     title: "Course overview",
     description: "JSON course reader: open and missing work, recent materials (with attachments), recent announcements, topics. {courseId} autocompletes from enrolled course names. Same shapes as the tools.",
     mimeType: "application/json",
-  }, async (uri, variables) => {
+  }, async (uri, variables, extra) => {
     try {
       const courseId = String(variables.courseId ?? "");
       if (!courseId) throw new Error("courseId is required.");
       const services = await getServices();
-      const body = await getCourseDetail(services, courseId);
+      const body = await getCourseDetail(services, courseId, Date.now(), extra?.signal);
       return { contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(body, null, 2) }] };
     } catch (error) {
       throw new Error(`Request failed: ${(error instanceof Error ? error.message : String(error)).replace(/[.]+$/, "")}.`);

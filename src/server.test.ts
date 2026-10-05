@@ -300,6 +300,22 @@ describe("buildServer", () => {
     expect((data.warnings as string[]).join(" ")).toMatch(/Attach failed: bad request/);
   });
 
+  it("submit_work never retries the non-idempotent attachment write", async () => {
+    const serverError = Object.assign(new Error("server error"), { code: 500 });
+    const { client, modifyAttachments } = await connected({ denyWrites: false, attachError: serverError });
+    await client.callTool({ name: "submit_work", arguments: { courseId: "c1", assignmentId: "w1", fileIds: ["d9"] } });
+    expect(modifyAttachments).toHaveBeenCalledTimes(1);
+  });
+
+  it("caches the course index briefly across calls", async () => {
+    const { client, services } = await connected();
+    await client.callTool({ name: "get_overview", arguments: { view: "due" } });
+    const first = (services.classroom.courses.list as ReturnType<typeof vi.fn>).mock.calls.length;
+    await client.callTool({ name: "get_overview", arguments: { view: "missing" } });
+    const second = (services.classroom.courses.list as ReturnType<typeof vi.fn>).mock.calls.length;
+    expect(second).toBe(first);
+  });
+
   it("submit_work allows a turn-in-only call with confirmation", async () => {
     const { client, modifyAttachments, turnIn } = await connected({ denyWrites: false });
     const result = await client.callTool({

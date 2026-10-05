@@ -150,6 +150,7 @@ async function streamToFile(
   fileName: string,
   maxFileBytes: number,
   budget: DownloadBudget,
+  signal?: AbortSignal | undefined,
 ): Promise<{ path: string; name: string; size: number }> {
   const { handle, name } = await openExclusive(dir, fileName);
   const destPath = path.join(dir, name);
@@ -172,7 +173,7 @@ async function streamToFile(
     },
   });
   try {
-    await pipeline(source, limiter, handle.createWriteStream());
+    await pipeline(source, limiter, handle.createWriteStream(), { signal });
     return { path: destPath, name, size: bytes };
   } catch (error) {
     budget.used -= bytes;
@@ -195,11 +196,13 @@ export async function downloadMany(
     roots?: string[] | undefined;
     maxFileBytes?: number | undefined;
     maxTotalBytes?: number | undefined;
+    signal?: AbortSignal | undefined;
   } = {},
 ): Promise<DownloadResult> {
   if (files.length > MAX_DOWNLOAD_FILES) {
     throw new Error(`At most ${MAX_DOWNLOAD_FILES} files per call, got ${files.length}. Pass fileIds to select fewer.`);
   }
+  const signal = opts.signal;
   const maxFileBytes = opts.maxFileBytes ?? MAX_DOWNLOAD_FILE_BYTES;
   const maxTotalBytes = opts.maxTotalBytes ?? MAX_DOWNLOAD_TOTAL_BYTES;
   const destDir = await assertInsideRoots(opts.destinationDir ?? DEFAULT_DOWNLOAD_DIR, opts.roots ?? undefined);
@@ -210,6 +213,7 @@ export async function downloadMany(
   const budget: DownloadBudget = { used: 0, max: maxTotalBytes };
 
   const saved = await mapPool(files, DOWNLOAD_CONCURRENCY, async (file): Promise<SavedFile> => {
+    if (signal?.aborted) throw new Error("Request cancelled by the MCP host.");
     if (file.kind !== "driveFile") {
       return {
         name: file.name ?? file.fileId, kind: file.kind, path: null,
@@ -231,7 +235,7 @@ export async function downloadMany(
             drive.files.export({ fileId: file.fileId, mimeType: target.mimeType }, { responseType: "stream" }))
         : await withRetry(`drive.files.get ${file.fileId}`, () =>
             drive.files.get({ fileId: file.fileId, alt: "media" }, { responseType: "stream" }));
-      const written = await streamToFile(result.data as NodeJS.ReadableStream, destDir, fileName, maxFileBytes, budget);
+      const written = await streamToFile(result.data as NodeJS.ReadableStream, destDir, fileName, maxFileBytes, budget, signal);
       return {
         name: written.name, kind: file.kind, path: written.path, url: file.url ?? null,
         size: written.size, exportedAs: target?.ext ?? null, error: null,
@@ -256,20 +260,27 @@ export async function uploadLocalFile(
   filePath: string,
   name?: string,
   roots?: string[],
+  signal?: AbortSignal | undefined,
 ): Promise<UploadedFile> {
   const fallbackName = name ?? path.basename(filePath);
   let handle: fs.FileHandle | undefined;
+  let stream: ReturnType<fs.FileHandle["createReadStream"]> | undefined;
+  const onAbort = () => stream?.destroy(new Error("Request cancelled by the MCP host."));
   try {
+    if (signal?.aborted) throw new Error("Request cancelled by the MCP host.");
     const absolute = await assertInsideRoots(filePath, roots ?? undefined);
     handle = await fs.open(absolute, "r");
     const stat = await handle.stat();
     if (!stat.isFile()) throw new Error("filePath must point to a regular file.");
     if (stat.size > MAX_UPLOAD_BYTES) throw new Error(`filePath must be ${formatBytes(MAX_UPLOAD_BYTES)} or smaller.`);
-    const response = await withRetry("drive.files.create", () => drive.files.create({
+    stream = handle.createReadStream({ autoClose: false });
+    signal?.addEventListener("abort", onAbort, { once: true });
+    // No retry: uploading is a non-idempotent write and must never be duplicated.
+    const response = await drive.files.create({
       requestBody: { name: name ?? path.basename(absolute) },
-      media: { body: handle!.createReadStream({ autoClose: false }) },
+      media: { body: stream as ReturnType<fs.FileHandle["createReadStream"]> },
       fields: "id,name,webViewLink,size",
-    }));
+    });
     const data = response.data;
     return {
       name: data.name ?? fallbackName,
@@ -284,6 +295,8 @@ export async function uploadLocalFile(
       error: error instanceof Error ? error.message : String(error),
     };
   } finally {
+    signal?.removeEventListener("abort", onAbort);
+    stream?.destroy();
     await handle?.close().catch(() => {});
   }
 }
@@ -292,7 +305,8 @@ export async function uploadLocalFiles(
   drive: drive_v3.Drive,
   files: Array<{ path: string; name?: string }>,
   roots?: string[],
+  signal?: AbortSignal | undefined,
 ): Promise<UploadedFile[]> {
   // Uploads are non-idempotent writes, so keep concurrency conservative.
-  return mapPool(files, UPLOAD_CONCURRENCY, (file) => uploadLocalFile(drive, file.path, file.name, roots));
+  return mapPool(files, UPLOAD_CONCURRENCY, (file) => uploadLocalFile(drive, file.path, file.name, roots, signal));
 }

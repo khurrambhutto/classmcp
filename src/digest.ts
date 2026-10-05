@@ -1,7 +1,7 @@
 import type { classroom_v1 } from "googleapis";
 import type { GoogleServices } from "./google.js";
 import { withRetry } from "./google.js";
-import { scanAll, type ScanOptions, type ScanResult } from "./pagination.js";
+import { scanAll, CancelledError, type ScanOptions, type ScanResult } from "./pagination.js";
 import { mapPool } from "./util.js";
 import type {
   AnnouncementDetail, AnnouncementSummary, Attachment, AssignmentDetail, CourseDetail,
@@ -11,8 +11,8 @@ import type {
 
 type HistoryEntry = NonNullable<AssignmentDetail["history"]>[number];
 
-export type OverviewOptions = { view?: "due" | "missing" | "new" | "grades" | "courses"; window?: number; limit?: number; query?: string | undefined; includeArchived?: boolean; detail?: "concise" | "detailed" };
-export type SearchOptions = { query: string; courseId?: string | undefined; kinds?: Array<"assignment" | "material" | "announcement">; includeArchived?: boolean; limit?: number; detail?: "concise" | "detailed" };
+export type OverviewOptions = { view?: "due" | "missing" | "new" | "grades" | "courses"; window?: number; limit?: number; query?: string | undefined; includeArchived?: boolean; detail?: "concise" | "detailed"; signal?: AbortSignal | undefined };
+export type SearchOptions = { query: string; courseId?: string | undefined; kinds?: Array<"assignment" | "material" | "announcement">; includeArchived?: boolean; limit?: number; detail?: "concise" | "detailed"; signal?: AbortSignal | undefined };
 
 export function dueToMillis(
   dueDate?: classroom_v1.Schema$Date | null,
@@ -74,12 +74,15 @@ const DONE_STATES = new Set(["TURNED_IN", "RETURNED"]);
 // Every helper scans until the API runs out of pages or a safety budget stops
 // it, and reports `truncated` rather than silently dropping later pages.
 
-export async function listCourses(services: GoogleServices, opts: { includeArchived?: boolean } = {}): Promise<ScanResult<CourseRow>> {
-  const includeArchived = opts.includeArchived ?? true;
+const COURSE_CACHE_TTL_MS = 45_000;
+const courseCaches = new WeakMap<GoogleServices, { at: number; scan: ScanResult<CourseRow> }>();
+const courseInflights = new WeakMap<GoogleServices, Promise<ScanResult<CourseRow>>>();
+
+async function scanCourses(services: GoogleServices): Promise<ScanResult<CourseRow>> {
   const scan = await scanAll<CourseRow>(async (pageToken) => {
     const response = await withRetry("courses.list", () => services.classroom.courses.list({
       studentId: "me",
-      courseStates: includeArchived ? ["ACTIVE", "ARCHIVED"] : ["ACTIVE"],
+      courseStates: ["ACTIVE", "ARCHIVED"],
       pageSize: 100,
       pageToken,
     }));
@@ -92,6 +95,30 @@ export async function listCourses(services: GoogleServices, opts: { includeArchi
   }, { maxPages: 20, maxItems: 500 });
   scan.items.sort(compareCourses);
   return scan;
+}
+
+export async function listCourses(services: GoogleServices, opts: { includeArchived?: boolean; signal?: AbortSignal | undefined } = {}): Promise<ScanResult<CourseRow>> {
+  const includeArchived = opts.includeArchived ?? true;
+  if (!includeArchived) {
+    // The ACTIVE-only view is uncommon (search without includeArchived) and is
+    // derived from the same index, so cache only the full list.
+    const full = await listCourses(services, { includeArchived: true, signal: opts.signal });
+    return { ...full, items: full.items.filter((c) => c.state === "ACTIVE") };
+  }
+  if (courseCaches.get(services) && Date.now() - (courseCaches.get(services) as { at: number }).at < COURSE_CACHE_TTL_MS) {
+    return (courseCaches.get(services) as { scan: ScanResult<CourseRow> }).scan;
+  }
+  let inflight = courseInflights.get(services);
+  if (!inflight) {
+    inflight = scanCourses(services)
+      .then((scan) => {
+        courseCaches.set(services, { at: Date.now(), scan });
+        return scan;
+      })
+      .finally(() => { courseInflights.delete(services); });
+    courseInflights.set(services, inflight);
+  }
+  return inflight;
 }
 
 function compareCourses(a: CourseRow, b: CourseRow): number {
@@ -327,9 +354,10 @@ export async function getOverview(services: GoogleServices, opts: OverviewOption
   const limit = opts.limit ?? 20;
   const detail = opts.detail ?? "concise";
   const query = opts.query?.trim().toLowerCase() ?? "";
+  const signal = opts.signal;
   const errors: PartialError[] = [];
 
-  const courseScan = await listCourses(services, { includeArchived: true });
+  const courseScan = await listCourses(services, { includeArchived: true, signal });
   let scanTruncated = courseScan.truncated;
   // view=courses is an index and always lists archived courses; every other
   // view defaults to ACTIVE unless the caller opts in.
@@ -346,15 +374,16 @@ export async function getOverview(services: GoogleServices, opts: OverviewOption
     const since = nowMillis - window * 86_400_000;
     const failedCourses = new Set<string>();
     const perCourse = await mapPool(courses, 5, async (course): Promise<NewRow[]> => {
+      if (signal?.aborted) throw new CancelledError();
       const rows: NewRow[] = [];
       const push = (type: NewRow["type"], id: string | null | undefined, title: string | null | undefined, updated: string | null | undefined) => {
         if (!id || !updated || Date.parse(updated) < since) return;
         rows.push({ type, course: course.name, courseId: course.id, id, title: trimText(title, 140), updated });
       };
       const [work, materials, announcements] = await Promise.all([
-        settle(() => listCourseWork(services, course.id, { orderBy: "updateTime desc", maxItems: 200 })),
-        settle(() => listMaterials(services, course.id, { maxItems: 100 })),
-        settle(() => listAnnouncements(services, course.id, { maxItems: 100 })),
+        settle(() => listCourseWork(services, course.id, { orderBy: "updateTime desc", maxItems: 200, signal })),
+        settle(() => listMaterials(services, course.id, { maxItems: 100, signal })),
+        settle(() => listAnnouncements(services, course.id, { maxItems: 100, signal })),
       ]);
       const note = (operation: string) => (error: unknown) => errors.push({ courseId: course.id, course: course.name, operation, message: errorMessage(error) });
       if (work.ok) { scanTruncated ||= work.value.truncated; for (const w of work.value.items) push("assignment", w.id, w.title, w.updateTime ?? w.creationTime); }
@@ -375,9 +404,10 @@ export async function getOverview(services: GoogleServices, opts: OverviewOption
   let missingCount = 0;
   const failedCourses = new Set<string>();
   const perCourse = await mapPool(courses, 5, async (course): Promise<WorkRow[]> => {
+    if (signal?.aborted) throw new CancelledError();
     const [work, subs] = await Promise.all([
-      settle(() => listCourseWork(services, course.id, WORK_SCAN)),
-      settle(() => listSubmissions(services, course.id, WORK_SCAN)),
+      settle(() => listCourseWork(services, course.id, { ...WORK_SCAN, signal })),
+      settle(() => listSubmissions(services, course.id, { ...WORK_SCAN, signal })),
     ]);
     if (!work.ok) {
       errors.push({ courseId: course.id, course: course.name, operation: "courseWork.list", message: errorMessage(work.error) });
@@ -557,8 +587,8 @@ export async function getAnnouncementDetail(services: GoogleServices, courseId: 
 
 const COURSE_DETAIL_CAP = 20;
 
-export async function getCourseDetail(services: GoogleServices, courseId: string, nowMillis = Date.now()): Promise<CourseDetail> {
-  const courseScan = await listCourses(services, { includeArchived: true });
+export async function getCourseDetail(services: GoogleServices, courseId: string, nowMillis = Date.now(), signal?: AbortSignal): Promise<CourseDetail> {
+  const courseScan = await listCourses(services, { includeArchived: true, signal });
   const info = courseScan.items.find((c) => c.id === courseId);
   if (!info) throw new Error(`No course with id "${courseId}".`);
   const errors: PartialError[] = [];
@@ -569,8 +599,8 @@ export async function getCourseDetail(services: GoogleServices, courseId: string
   const [workSubs, materialsRes, announcementsRes, topicsRes] = await Promise.all([
     (async () => {
       const [work, subs] = await Promise.all([
-        settle(() => listCourseWork(services, courseId, { ...WORK_SCAN })),
-        settle(() => listSubmissions(services, courseId, { ...WORK_SCAN })),
+        settle(() => listCourseWork(services, courseId, { ...WORK_SCAN, signal })),
+        settle(() => listSubmissions(services, courseId, { ...WORK_SCAN, signal })),
       ]);
       if (!work.ok) { pushError("courseWork.list")(work.error); return { work: [], subs: [] }; }
       scanTruncated ||= work.value.truncated;
@@ -579,19 +609,19 @@ export async function getCourseDetail(services: GoogleServices, courseId: string
       return { work: work.value.items, subs: subs.value.items };
     })(),
     (async () => {
-      const result = await settle(() => listMaterials(services, courseId, { maxPages: 5, maxItems: 500 }));
+      const result = await settle(() => listMaterials(services, courseId, { maxPages: 5, maxItems: 500, signal }));
       if (!result.ok) { pushError("courseWorkMaterials.list")(result.error); return []; }
       scanTruncated ||= result.value.truncated;
       return result.value.items;
     })(),
     (async () => {
-      const result = await settle(() => listAnnouncements(services, courseId, { maxPages: 5, maxItems: 500 }));
+      const result = await settle(() => listAnnouncements(services, courseId, { maxPages: 5, maxItems: 500, signal }));
       if (!result.ok) { pushError("announcements.list")(result.error); return []; }
       scanTruncated ||= result.value.truncated;
       return result.value.items;
     })(),
     (async () => {
-      const result = await settle(() => listTopics(services, courseId, { maxPages: 5, maxItems: 500 }));
+      const result = await settle(() => listTopics(services, courseId, { maxPages: 5, maxItems: 500, signal }));
       if (!result.ok) return { status: (isDenied(result.error) ? "denied" : "error") as CourseDetail["topicsStatus"], rows: null as CourseDetail["topics"] };
       scanTruncated ||= result.value.truncated;
       const rows = result.value.items
@@ -677,7 +707,7 @@ export async function searchEverything(services: GoogleServices, opts: SearchOpt
   const errors: PartialError[] = [];
   const wantsAssignments = kinds.has("assignment");
 
-  const courseScan = await listCourses(services, { includeArchived: true });
+  const courseScan = await listCourses(services, { includeArchived: true, signal: opts.signal });
   let scanTruncated = courseScan.truncated;
   let courses: CourseRow[];
   let skippedArchived = 0;
@@ -698,6 +728,7 @@ export async function searchEverything(services: GoogleServices, opts: SearchOpt
 
   const failedCourses = new Set<string>();
   const perCourse = await mapPool(courses, 5, async (course): Promise<SearchHit[]> => {
+    if (opts.signal?.aborted) throw new CancelledError();
     const hits: SearchHit[] = [];
     let kindsOk = 0;
     let kindsFailed = 0;
@@ -708,10 +739,10 @@ export async function searchEverything(services: GoogleServices, opts: SearchOpt
 
     // Only fetch the endpoints the requested kinds actually need.
     const [work, subs, materials, announcements] = await Promise.all([
-      wantsAssignments ? settle(() => listCourseWork(services, course.id, { orderBy: "updateTime desc", ...WORK_SCAN })) : undefined,
-      wantsAssignments ? settle(() => listSubmissions(services, course.id, WORK_SCAN)) : undefined,
-      kinds.has("material") ? settle(() => listMaterials(services, course.id, { maxPages: 5, maxItems: 500 })) : undefined,
-      kinds.has("announcement") ? settle(() => listAnnouncements(services, course.id, { maxPages: 5, maxItems: 500 })) : undefined,
+      wantsAssignments ? settle(() => listCourseWork(services, course.id, { orderBy: "updateTime desc", ...WORK_SCAN, signal: opts.signal })) : undefined,
+      wantsAssignments ? settle(() => listSubmissions(services, course.id, { ...WORK_SCAN, signal: opts.signal })) : undefined,
+      kinds.has("material") ? settle(() => listMaterials(services, course.id, { maxPages: 5, maxItems: 500, signal: opts.signal })) : undefined,
+      kinds.has("announcement") ? settle(() => listAnnouncements(services, course.id, { maxPages: 5, maxItems: 500, signal: opts.signal })) : undefined,
     ]);
 
     if (wantsAssignments) {

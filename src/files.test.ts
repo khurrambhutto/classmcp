@@ -291,6 +291,18 @@ describe("downloadMany", () => {
     expect(result.saved[0].error).toMatch(/100 B limit/);
     expect((drive.files.get as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
   });
+
+  it("stops before fetching anything when the call is already cancelled", async () => {
+    const root = await tempRoot();
+    const controller = new AbortController();
+    controller.abort();
+    const drive = fakeDrive({});
+    await expect(downloadMany(drive, [{ fileId: "f", kind: "driveFile" }], {
+      destinationDir: root, roots: [root], signal: controller.signal,
+    })).rejects.toThrow(/cancelled/);
+    expect((drive.files.get as ReturnType<typeof vi.fn>).mock.calls.length).toBe(0);
+    expect(await fs.readdir(root)).toEqual([]);
+  });
 });
 
 describe("uploadLocalFiles", () => {
@@ -338,5 +350,25 @@ describe("uploadLocalFiles", () => {
     ], [root]);
     expect(results.map((r) => r.error)).toEqual([null, null, null]);
     expect((drive.files.create as ReturnType<typeof vi.fn>).mock.calls.length).toBe(3);
+  });
+
+  it("honors cancellation without calling Drive", async () => {
+    const root = await tempRoot();
+    await fs.writeFile(path.join(root, "a.txt"), "a");
+    const controller = new AbortController();
+    controller.abort();
+    const drive = fakeDrive({});
+    const results = await uploadLocalFiles(drive, [{ path: path.join(root, "a.txt") }], [root], controller.signal);
+    expect(results[0].error).toMatch(/cancelled/);
+    expect(drive.files.create as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
+  });
+
+  it("never retries a failed upload (non-idempotent write)", async () => {
+    const root = await tempRoot();
+    await fs.writeFile(path.join(root, "a.txt"), "a");
+    const drive = fakeDrive({ create: async () => { throw Object.assign(new Error("server error"), { code: 500 }); } });
+    const results = await uploadLocalFiles(drive, [{ path: path.join(root, "a.txt") }], [root]);
+    expect(results[0].error).toMatch(/server error/);
+    expect((drive.files.create as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
   });
 });
