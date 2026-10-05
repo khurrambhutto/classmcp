@@ -1,14 +1,31 @@
 # AGENTS.md
 
-Local Google Classroom MCP server. TypeScript, Node >= 20.
+Local Google Classroom MCP server. TypeScript, Node >= 20. Package name
+`gcrclassmcp`, executable `classmcp`.
 
-Run `npm run build`, `npm run typecheck`, `npm run test` before finishing.
+Run `npm run typecheck`, `npm run test`, `npm run build` before finishing.
+`npm run check` runs all three; `npm run pack:verify` packs the tarball,
+installs it into a fresh project, and smoke-tests the stdio server.
 
 Tool surface (5 tools): `get_overview`, `get_assignment`, `search`, `download_files`, `submit_work`.
 
 Keep `runServer` lazy: connect first, load Google per tool call via the cached `getServices()` factory (see Solved issues).
 
 Call ClassMCP tools inside the `execute` code runtime with bracket notation, e.g. `tools.classmcp["get_overview"]({})` (see Solved issues).
+
+Release process: `RELEASE.md`. Host configs: `README.md`. Changes: `CHANGELOG.md`.
+
+## Invariants (do not regress)
+
+- All file paths go through `assertInsideRoots` (canonical `realpath` checks).
+- Downloads never overwrite or follow symlinks; collisions become `name (1).ext`.
+- Non-idempotent writes (`drive.files.create`, `modifyAttachments`, `turnIn`)
+  are never retried, and turn-in never runs after a failed upload/attach.
+- Google list calls go through the `scanAll` helpers and report
+  `scanTruncated`; per-endpoint failures use `errors[].operation`.
+- stdout is MCP traffic only; log to stderr. `setup` is the only command that
+  may open readline.
+- Secret files are `0600`, the config dir `0700`, repaired on setup/doctor.
 
 ## Solved issues
 

@@ -32,8 +32,13 @@ npm run pack:verify           # tarball install + MCP stdio smoke test
 - [ ] Submission sequencing tests pass (no turn-in after failed upload/attach).
 - [ ] OAuth state/timeout/denial tests pass; listener closes on every path.
 - [ ] Tarball contains no credentials, tokens, tests, source maps, reports, or
-      absolute development paths (pack:verify checks the file list).
+      absolute development paths (pack:verify checks the file list and scans
+      text content for secret shapes).
 - [ ] No secret values appear in tool output, errors, or logs.
+- [ ] MCP Inspector reports 0 schema errors:
+      `npx @modelcontextprotocol/inspector --cli classmcp serve --method tools/list`
+      (advisory `type: [x, null]` portability warnings are expected from
+      zod-to-json-schema and are accepted; 0 errors is the gate).
 
 ## 3. Release candidate
 
