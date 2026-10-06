@@ -2,7 +2,9 @@ import os from "node:os";
 import path from "node:path";
 
 export const APP_NAME = "classmcp";
-export const CONFIG_DIR = path.join(os.homedir(), ".classmcp");
+export const CONFIG_DIR = process.env.CLASSMCP_CONFIG_DIR
+  ? path.resolve(process.env.CLASSMCP_CONFIG_DIR)
+  : path.join(os.homedir(), ".classmcp");
 export const CREDENTIALS_FILE = path.join(CONFIG_DIR, "credentials.json");
 export const TOKEN_KEY = "oauth-tokens";
 
@@ -23,6 +25,7 @@ export const SCOPES = [
   "https://www.googleapis.com/auth/classroom.courseworkmaterials.readonly",
   "https://www.googleapis.com/auth/classroom.announcements.readonly",
   "https://www.googleapis.com/auth/classroom.student-submissions.me.readonly",
+  "https://www.googleapis.com/auth/classroom.topics.readonly",
   "https://www.googleapis.com/auth/drive.readonly",
   "https://www.googleapis.com/auth/drive.file"
 ];

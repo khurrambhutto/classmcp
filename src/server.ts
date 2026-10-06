@@ -1,13 +1,20 @@
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { createServices, withRetry } from "./google.js";
+import { VERSION } from "./version.js";
 import {
   getOverview,
   getAssignmentDetail,
+  getMaterialDetail,
+  getAnnouncementDetail,
+  getCourseDetail,
   searchEverything,
   listCourses,
+  listCourseWork,
+  listMaterials,
+  listAnnouncements,
 } from "./digest.js";
-import { resolveCourse, resolveAssignment, type CourseRef, type AssignmentRef } from "./resolve.js";
+import { resolveCourse, resolveAssignment, resolveMaterial, resolveAnnouncement, type CourseRef, type AssignmentRef, type MaterialRef, type AnnouncementRef } from "./resolve.js";
 import { downloadMany, uploadLocalFiles, type DownloadItem } from "./files.js";
 import {
   OverviewInputShape,
@@ -20,6 +27,9 @@ import {
   SearchResultSchema,
   DownloadResultSchema,
   SubmitResultSchema,
+  MaterialDetailSchema,
+  AnnouncementDetailSchema,
+  CourseDetailSchema,
 } from "./schemas.js";
 
 type Services = Awaited<ReturnType<typeof createServices>>;
@@ -43,16 +53,23 @@ function isProjectDenied(error: unknown): boolean {
   return /ProjectPermissionDenied|Developer Console project/i.test(message);
 }
 
-const READ_ONLY = { readOnlyHint: true, idempotentHint: true } as const;
+const READ_ONLY = { readOnlyHint: true, idempotentHint: true, openWorldHint: true } as const;
+
+/** Named id/name parameters are mutually exclusive per reference. */
+function refPairError(label: string, id: string | undefined, name: string | undefined): string | null {
+  if (id !== undefined && name !== undefined) return `Pass ${label}Id or ${label}, not both.`;
+  return null;
+}
+
+const MAX_SUBMISSION_ATTACHMENTS = 20;
 
 export function buildServer(getServices: () => Promise<Services>): McpServer {
-  const server = new McpServer({ name: "classmcp", version: "0.2.0" }, {
+  const server = new McpServer({ name: "classmcp", version: VERSION }, {
     instructions:
-      "Student-side Google Classroom. Start with get_overview (due/missing/new/grades/courses); drill into get_assignment; " +
-      "find items with search; fetch handouts with download_files; submit_work uploads to Drive and, when Google blocks " +
-      "attach/turn-in (it usually does: only the app that created an assignment may modify submissions), returns links to " +
-      "finish in the Classroom UI. Tools accept course names or ids and assignment title fragments or ids. Row ids are " +
-      "stable and can be passed to follow-up calls.",
+      "Student-side Google Classroom. Start with get_overview (due/missing/new/grades/courses), drill in with " +
+      "get_assignment, find anything via search, fetch handouts with download_files. submit_work uploads to Drive " +
+      "then best-effort attaches and can turn in: Google usually blocks teacher-created work (blocked:true) — finish " +
+      "via the returned Classroom link. Tools accept course/assignment names or stable ids; ids work for chaining.",
   });
 
   server.registerTool("get_overview", {
@@ -62,16 +79,17 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
       "Prefer over listing assignments per course. view=due (default) = upcoming open work due within `window`, " +
       "soonest first (overdue work is NOT here); view=missing = overdue/late only, most recently due first; " +
       "view=new = updates in the last `window` days; view=grades = scored work; view=courses = course ids. " +
-      "window 1-30 (default 7); limit 1-50 (default 20); query filters title/course; detail=detailed adds links. " +
+      "window 1-30 (default 7); limit 1-50 (default 20); query filters title/course; detail=detailed adds links; " +
+      "includeArchived=true also scans ARCHIVED courses (the result reports skippedArchived so narrowing is never silent). " +
       "Returns truncated+hint when capped (the hint also steers to view=missing when overdue items exist); " +
       "errors[] lists per-course failures without failing the call.",
     inputSchema: OverviewInputShape,
     outputSchema: OverviewResultSchema,
     annotations: READ_ONLY,
-  }, async (args) => {
+  }, async (args, extra) => {
     try {
       const services = await getServices();
-      return ok(await getOverview(services, args));
+      return ok(await getOverview(services, { ...args, signal: extra?.signal }));
     } catch (error) { return fail(error); }
   });
 
@@ -88,6 +106,8 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
     annotations: READ_ONLY,
   }, async ({ courseId, course, assignmentId, assignment, maxDescChars }) => {
     try {
+      const pairError = refPairError("course", courseId, course) ?? refPairError("assignment", assignmentId, assignment);
+      if (pairError) return fail(new Error(pairError));
       const services = await getServices();
       const courseRes = await resolveCourse(services, { courseId, course } satisfies CourseRef);
       if (!courseRes.ok) return fail(new Error(courseRes.message));
@@ -107,8 +127,10 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
     inputSchema: SearchInputShape,
     outputSchema: SearchResultSchema,
     annotations: READ_ONLY,
-  }, async ({ query, courseId, course, kinds, limit, detail }) => {
+  }, async ({ query, courseId, course, kinds, includeArchived, limit, detail }, extra) => {
     try {
+      const pairError = refPairError("course", courseId, course);
+      if (pairError) return fail(new Error(pairError));
       const services = await getServices();
       let scopedCourseId: string | undefined;
       if (courseId || course) {
@@ -117,7 +139,7 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
         scopedCourseId = courseRes.item.id;
       }
       return ok(await searchEverything(services, {
-        query, courseId: scopedCourseId, kinds, limit, detail,
+        query, courseId: scopedCourseId, kinds, includeArchived, limit, detail, signal: extra?.signal,
       }));
     } catch (error) { return fail(error); }
   });
@@ -125,38 +147,116 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
   server.registerTool("download_files", {
     title: "Download files",
     description:
-      "Download an assignment's handouts/attachments (or specific Drive fileIds) to disk in ONE call (max 20 files). " +
+      "Download an assignment's, material's, or announcement's handouts/attachments (or specific Drive fileIds) to disk in ONE call (max 20 files). " +
       "Google Docs/Sheets/Slides are exported (exportAs: pdf|docx|xlsx|pptx; defaults docx/xlsx/pptx) because raw " +
-      "download fails on them. destinationDir must resolve inside ~/Downloads or $CLASSMCP_WORKDIR (default " +
-      "<root>/classmcp). Accepts course/assignment names or ids. Per-file errors do not abort the rest.",
+      "download fails on them. When fileIds is present, ONLY those files are downloaded (the scoped item's other " +
+      "attachments are skipped). fileIds alone (no course/item) downloads exactly those Drive files. destinationDir " +
+      "must resolve inside ~/Downloads or $CLASSMCP_WORKDIR (default <root>/classmcp); CLASSMCP_WORKDIR must be " +
+      "exported in the MCP server's environment config and cannot be changed per call. Accepts course/assignment/material/announcement " +
+      "names or ids. Per-file errors do not abort the rest.",
     inputSchema: DownloadInputShape,
     outputSchema: DownloadResultSchema,
-    annotations: { readOnlyHint: false, idempotentHint: true, openWorldHint: true },
-  }, async ({ courseId, course, assignmentId, assignment, fileIds, destinationDir, exportAs }) => {
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  }, async ({ courseId, course, assignmentId, assignment, materialId, material, announcementId, announcement, fileIds, destinationDir, exportAs }, extra) => {
     try {
+      const pairError = refPairError("course", courseId, course)
+        ?? refPairError("assignment", assignmentId, assignment)
+        ?? refPairError("material", materialId, material)
+        ?? refPairError("announcement", announcementId, announcement);
+      if (pairError) return fail(new Error(pairError));
       const services = await getServices();
-      const items: DownloadItem[] = [];
-      if (courseId || course || assignmentId || assignment) {
+      const hasAssignmentRef = Boolean(assignmentId || assignment);
+      const hasMaterialRef = Boolean(materialId || material);
+      const hasAnnouncementRef = Boolean(announcementId || announcement);
+      const refKinds = [hasAssignmentRef, hasMaterialRef, hasAnnouncementRef].filter(Boolean).length;
+      if (refKinds > 1) {
+        return fail(new Error("Pass only one of assignment, material, or announcement (plus course)."));
+      }
+      const hasItemRef = refKinds === 1;
+      const requestedIds = [...new Set((fileIds ?? []).map((id) => id.trim()).filter(Boolean))];
+      const scoped: DownloadItem[] = [];
+      if (hasItemRef) {
         const courseRes = await resolveCourse(services, { courseId, course } satisfies CourseRef);
         if (!courseRes.ok) return fail(new Error(courseRes.message));
-        const workRes = await resolveAssignment(services, courseRes.item.id, { assignmentId, assignment } satisfies AssignmentRef);
-        if (!workRes.ok) return fail(new Error(workRes.message));
-        const detail = await getAssignmentDetail(services, courseRes.item.id, courseRes.item.name, workRes.item.id, 0);
         const seen = new Set<string>();
-        for (const attachment of [...detail.attachments, ...detail.myAttachments]) {
-          const key = attachment.id ?? attachment.url ?? attachment.name ?? "";
-          if (!key || seen.has(key)) continue;
-          seen.add(key);
-          items.push({ fileId: attachment.id ?? key, name: attachment.name, kind: attachment.kind, url: attachment.url });
+        const pushAttachments = (attachments: Array<{ id: string | null; name: string | null; kind: "driveFile" | "form" | "link" | "youtube"; url: string | null }>) => {
+          for (const attachment of attachments) {
+            const key = attachment.id ?? attachment.url ?? attachment.name ?? "";
+            if (!key || seen.has(key)) continue;
+            seen.add(key);
+            scoped.push({ fileId: attachment.id ?? key, name: attachment.name, kind: attachment.kind, url: attachment.url });
+          }
+        };
+        if (hasMaterialRef) {
+          const matRes = await resolveMaterial(services, courseRes.item.id, { materialId, material } satisfies MaterialRef);
+          if (!matRes.ok) return fail(new Error(matRes.message));
+          const detail = await getMaterialDetail(services, courseRes.item.id, courseRes.item.name, matRes.item.id);
+          pushAttachments(detail.attachments);
+        } else if (hasAnnouncementRef) {
+          const annRes = await resolveAnnouncement(services, courseRes.item.id, { announcementId, announcement } satisfies AnnouncementRef);
+          if (!annRes.ok) return fail(new Error(annRes.message));
+          const detail = await getAnnouncementDetail(services, courseRes.item.id, courseRes.item.name, annRes.item.id);
+          pushAttachments(detail.attachments);
+        } else {
+          // Fall back to materials/announcements so a material id or title passed
+          // as assignmentId/assignment still resolves (search returns all kinds).
+          // An exact assignmentId resolves without listing, so validate it with
+          // the detail GET before accepting it.
+          let resolved = false;
+          let workError: string | null = null;
+          const workRes = await resolveAssignment(services, courseRes.item.id, { assignmentId, assignment } satisfies AssignmentRef);
+          if (workRes.ok) {
+            try {
+              const detail = await getAssignmentDetail(services, courseRes.item.id, courseRes.item.name, workRes.item.id, 0);
+              pushAttachments([...detail.attachments, ...detail.myAttachments]);
+              resolved = true;
+            } catch (error) {
+              workError = error instanceof Error ? error.message : String(error);
+            }
+          } else {
+            workError = workRes.message;
+          }
+          if (!resolved) {
+            const asMaterial = await resolveMaterial(services, courseRes.item.id, { materialId: assignmentId, material: assignment });
+            if (asMaterial.ok) {
+              try {
+                const detail = await getMaterialDetail(services, courseRes.item.id, courseRes.item.name, asMaterial.item.id);
+                pushAttachments(detail.attachments);
+                resolved = true;
+              } catch { /* fall through to announcements */ }
+            }
+          }
+          if (!resolved) {
+            const asAnnouncement = await resolveAnnouncement(services, courseRes.item.id, { announcementId: assignmentId, announcement: assignment });
+            if (asAnnouncement.ok) {
+              try {
+                const detail = await getAnnouncementDetail(services, courseRes.item.id, courseRes.item.name, asAnnouncement.item.id);
+                pushAttachments(detail.attachments);
+                resolved = true;
+              } catch { /* fall through to the error below */ }
+            }
+          }
+          if (!resolved) return fail(new Error(workError ?? "No assignment, material, or announcement matched."));
         }
       }
-      for (const id of fileIds ?? []) {
-        if (!items.some((item) => item.fileId === id)) items.push({ fileId: id, name: null, kind: "driveFile", url: null });
+      let items: DownloadItem[];
+      if (requestedIds.length > 0) {
+        const byId = new Map(scoped.filter((s) => s.kind === "driveFile" || s.fileId).map((s) => [s.fileId, s]));
+        const byUrl = new Map(scoped.map((s) => [s.url ?? "", s]));
+        items = requestedIds.map((id) => {
+          const known = byId.get(id) ?? (id.startsWith("http") ? byUrl.get(id) : undefined);
+          if (known) return known;
+          return { fileId: id, name: null, kind: "driveFile" as const, url: null };
+        });
+      } else {
+        items = scoped;
       }
       if (items.length === 0) {
-        return fail(new Error("Provide an assignment (course + assignment) or fileIds to download."));
+        return fail(new Error(hasItemRef
+          ? "No attachments found on the scoped item. Pass fileIds to download specific Drive files."
+          : "Provide an assignment, material, or announcement (course + item) or fileIds to download."));
       }
-      return ok(await downloadMany(services.drive, items, { destinationDir, exportAs }));
+      return ok(await downloadMany(services.drive, items, { destinationDir, exportAs, signal: extra?.signal }));
     } catch (error) { return fail(error); }
   });
 
@@ -172,8 +272,10 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
     inputSchema: SubmitInputShape,
     outputSchema: SubmitResultSchema,
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
-  }, async ({ courseId, course, assignmentId, assignment, files, fileIds, link, turnIn, confirmTurnIn }) => {
+  }, async ({ courseId, course, assignmentId, assignment, files, fileIds, link, turnIn, confirmTurnIn }, extra) => {
     try {
+      const pairError = refPairError("course", courseId, course) ?? refPairError("assignment", assignmentId, assignment);
+      if (pairError) return fail(new Error(pairError));
       const services = await getServices();
       if (turnIn && confirmTurnIn !== "I confirm turn in") {
         return fail(new Error("turnIn requires confirmTurnIn to be exactly: I confirm turn in"));
@@ -182,58 +284,85 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
       if (!hasWork) {
         return fail(new Error("Provide files, fileIds, or link to attach, or set turnIn with confirmTurnIn."));
       }
+      const requestedTotal = (files?.length ?? 0) + (fileIds?.length ?? 0) + (link ? 1 : 0);
+      if (requestedTotal > MAX_SUBMISSION_ATTACHMENTS) {
+        return fail(new Error(`At most ${MAX_SUBMISSION_ATTACHMENTS} attachments per submission, got ${requestedTotal}. Split the work into fewer files.`));
+      }
       const courseRes = await resolveCourse(services, { courseId, course } satisfies CourseRef);
       if (!courseRes.ok) return fail(new Error(courseRes.message));
       const workRes = await resolveAssignment(services, courseRes.item.id, { assignmentId, assignment } satisfies AssignmentRef);
       if (!workRes.ok) return fail(new Error(workRes.message));
       const work = workRes.item;
 
-      const uploaded = files?.length ? await uploadLocalFiles(services.drive, files) : [];
-      const addAttachments = [
-        ...uploaded.filter((item) => item.id).map((item) => ({ driveFile: { id: item.id as string } })),
-        ...(fileIds ?? []).map((id) => ({ driveFile: { id } })),
-        ...(link ? [{ link: { url: link.url, ...(link.title ? { title: link.title } : {}) } }] : []),
-      ];
+      const requestedFiles = files ?? [];
+      const requestedFileIds = [...new Set((fileIds ?? []).map((id) => id.trim()).filter(Boolean))];
+      const requestedLink = link ? [{ link: { url: link.url, ...(link.title ? { title: link.title } : {}) } }] : [];
+      const warnings: string[] = [];
 
-      let attached = false;
-      let turnedIn = false;
-      let blocked = false;
-      const notes: string[] = [];
+      const uploaded = requestedFiles.length > 0 ? await uploadLocalFiles(services.drive, requestedFiles, undefined, extra?.signal) : [];
+      const uploadsSucceeded = uploaded.filter((item) => item.id !== null && item.error === null);
+      const uploadsFailed = uploaded.length - uploadsSucceeded.length;
       for (const item of uploaded) {
-        if (item.error) notes.push(`Upload failed for ${item.name}: ${item.error}`);
+        if (item.error) warnings.push(`Upload failed for ${item.name}: ${item.error}`);
       }
 
-      if (addAttachments.length > 0) {
+      const addAttachments = [
+        ...uploadsSucceeded.map((item) => ({ driveFile: { id: item.id as string } })),
+        ...requestedFileIds.map((id) => ({ driveFile: { id } })),
+        ...requestedLink,
+      ];
+
+      let attachmentAttempted = false;
+      let attached = false;
+      let attachedCount = 0;
+      let turnInAttempted = false;
+      let turnedIn = false;
+      let blocked = false;
+      let turnInSkippedReason: string | null = null;
+
+      // Uploads are non-idempotent writes and Google has no undo: never attach a
+      // partial set, never turn in after a failed earlier step.
+      if (requestedFiles.length > 0 && uploadsFailed > 0) {
+        warnings.push("Skipped attaching because at least one upload failed; successful Drive links are still returned.");
+        if (turnIn) turnInSkippedReason = "an upload failed";
+      }
+
+      if (addAttachments.length > 0 && uploadsFailed === 0) {
+        attachmentAttempted = true;
         try {
-          await withRetry(`modifyAttachments ${work.id}`, () =>
-            services.classroom.courses.courseWork.studentSubmissions.modifyAttachments({
-              courseId: courseRes.item.id, courseWorkId: work.id, id: "me",
-              requestBody: { addAttachments },
-            }));
+          // No retry: modifying submissions is non-idempotent.
+          await services.classroom.courses.courseWork.studentSubmissions.modifyAttachments({
+            courseId: courseRes.item.id, courseWorkId: work.id, id: "me",
+            requestBody: { addAttachments },
+          });
           attached = true;
+          attachedCount = addAttachments.length;
         } catch (error) {
           if (isProjectDenied(error)) {
             blocked = true;
-            notes.push("Google rejected the attachment: only the app that created an assignment may modify submissions.");
+            warnings.push("Google rejected the attachment: only the app that created an assignment may modify submissions.");
+            if (turnIn) turnInSkippedReason = "Google blocked the attachment (project restriction)";
           } else {
-            notes.push(`Attach failed: ${error instanceof Error ? error.message : String(error)}`);
+            warnings.push(`Attach failed: ${error instanceof Error ? error.message : String(error)}`);
+            if (turnIn) turnInSkippedReason = "the attachment step failed";
           }
         }
       }
 
-      if (turnIn) {
+      if (turnIn && turnInSkippedReason === null) {
+        turnInAttempted = true;
         try {
-          await withRetry(`turnIn ${work.id}`, () =>
-            services.classroom.courses.courseWork.studentSubmissions.turnIn({
-              courseId: courseRes.item.id, courseWorkId: work.id, id: "me", requestBody: {},
-            }));
+          // No retry: turning in is non-idempotent.
+          await services.classroom.courses.courseWork.studentSubmissions.turnIn({
+            courseId: courseRes.item.id, courseWorkId: work.id, id: "me", requestBody: {},
+          });
           turnedIn = true;
         } catch (error) {
           if (isProjectDenied(error)) {
             blocked = true;
-            notes.push("Google rejected the turn-in: only the app that created an assignment may modify submissions.");
+            warnings.push("Google rejected the turn-in: only the app that created an assignment may modify submissions.");
           } else {
-            notes.push(`Turn-in failed: ${error instanceof Error ? error.message : String(error)}`);
+            warnings.push(`Turn-in failed: ${error instanceof Error ? error.message : String(error)}`);
           }
         }
       }
@@ -247,32 +376,51 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
         myState = subs.data.studentSubmissions?.[0]?.state ?? "NEW";
       } catch { /* state is best-effort */ }
 
-      const uploadedOk = uploaded.filter((item) => !item.error).length;
-      const assignmentUrl = await assignmentLink(services, courseRes.item.id, work.id);
-      let message: string;
-      if (blocked) {
-        message =
-          `Uploaded ${uploadedOk} file(s) to Drive. ${notes.join(" ")} ` +
-          `Finish in Classroom (about 15 seconds): open ${work.title} at ` +
-          `${assignmentUrl} — add the file from Drive, then click Turn in.`;
-      } else if (turnedIn) {
-        message = `Attached ${addAttachments.length} item(s) and turned in ${work.title}.`;
-      } else if (attached) {
-        message = `Attached ${addAttachments.length} item(s) to ${work.title}. Not turned in; set turnIn=true with confirmTurnIn to finish.`;
-      } else {
-        message = notes.length > 0 ? notes.join(" ") : "Nothing was attached.";
+      // The message is derived from final state only, so it can never claim an
+      // attachment or turn-in that did not happen. The exact-id resolver may not
+      // know the title yet, so take it from the same GET that builds the link.
+      const linkInfo = await assignmentLink(services, courseRes.item.id, work.id);
+      const assignmentUrl = linkInfo.url;
+      const displayTitle = work.title || linkInfo.title || "the assignment";
+      const parts: string[] = [];
+      // Text-only hosts must see the concrete failure detail, not just warnings[].
+      for (const warning of warnings) {
+        if (/^(Upload failed|Attach failed|Turn-in failed)/.test(warning)) parts.push(warning);
       }
+      if (requestedFiles.length > 0) parts.push(`Uploaded ${uploadsSucceeded.length}/${requestedFiles.length} file(s) to Drive.`);
+      if (attached) parts.push(`Attached ${attachedCount} item(s) to ${displayTitle}.`);
+      if (turnedIn) parts.push(`Turned in ${displayTitle}.`);
+      if (turnInSkippedReason) parts.push(`Skipped turn-in because ${turnInSkippedReason}.`);
+      if (blocked) {
+        parts.push("Google blocked the change: only the app that created this assignment may modify submissions.");
+        parts.push(`Finish in Classroom (about 15 seconds): open ${assignmentUrl}, add the file from Drive, then click Turn in.`);
+      } else if (!attached && !turnedIn) {
+        if (attachmentAttempted) parts.push("Attaching failed; see warnings.");
+        else if (addAttachments.length === 0 && requestedFiles.length > 0 && uploadsFailed > 0) parts.push("Nothing was attached because every upload failed.");
+        else if (addAttachments.length > 0) parts.push("Nothing was attached.");
+      } else if (attached && !turnedIn && !turnInSkippedReason) {
+        parts.push(`Not turned in; set turnIn=true with confirmTurnIn to finish (or turn in from ${assignmentUrl}).`);
+      }
+      const message = parts.join(" ");
 
       return ok({
         courseId: courseRes.item.id,
         assignmentId: work.id,
-        title: work.title,
+        title: displayTitle,
         assignmentLink: assignmentUrl,
         uploaded,
+        uploadsRequested: requestedFiles.length,
+        uploadsSucceeded: uploadsSucceeded.length,
+        uploadsFailed,
+        attachmentAttempted,
         attached,
+        attachedCount,
+        turnInAttempted,
         turnedIn,
+        turnInSkippedReason,
         myState,
         blocked,
+        warnings,
         message,
       });
     } catch (error) { return fail(error); }
@@ -283,7 +431,7 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
   server.resource("course", new ResourceTemplate("classroom://courses/{courseId}", {
     list: async () => {
       const services = await getServices();
-      const courses = await listCourses(services, { includeArchived: true });
+      const { items: courses } = await listCourses(services, { includeArchived: true });
       return {
         resources: courses.map((c) => ({
           uri: `classroom://courses/${c.id}`,
@@ -295,7 +443,7 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
     complete: {
       courseId: async (value) => {
         const services = await getServices();
-        const courses = await listCourses(services, { includeArchived: true });
+        const { items: courses } = await listCourses(services, { includeArchived: true });
         const q = value.trim().toLowerCase();
         if (!q) return courses.map((c) => c.id).slice(0, 100);
         return courses
@@ -306,23 +454,14 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
     },
   }), {
     title: "Course overview",
-    description: "JSON overview of one Classroom course with recent coursework. {courseId} autocompletes from enrolled course names.",
+    description: "JSON course reader: open and missing work, recent materials (with attachments), recent announcements, topics. {courseId} autocompletes from enrolled course names. Same shapes as the tools.",
     mimeType: "application/json",
-  }, async (uri, variables) => {
+  }, async (uri, variables, extra) => {
     try {
       const courseId = String(variables.courseId ?? "");
       if (!courseId) throw new Error("courseId is required.");
       const services = await getServices();
-      const courses = await listCourses(services, { includeArchived: true });
-      const course = courses.find((c) => c.id === courseId);
-      const overview = await getOverview(services, { view: "due", window: 30, limit: 20 });
-      const body = {
-        id: courseId,
-        name: course?.name ?? null,
-        section: course?.section ?? null,
-        state: course?.state ?? null,
-        openWork: overview.items.filter((item) => "courseId" in item && item.courseId === courseId),
-      };
+      const body = await getCourseDetail(services, courseId, Date.now(), extra?.signal);
       return { contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(body, null, 2) }] };
     } catch (error) {
       throw new Error(`Request failed: ${(error instanceof Error ? error.message : String(error)).replace(/[.]+$/, "")}.`);
@@ -336,11 +475,9 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
         const courseId = context?.arguments?.courseId;
         if (!courseId) return [];
         const services = await getServices();
-        const response = await withRetry(`courseWork.list ${courseId}`, () => services.classroom.courses.courseWork.list({
-          courseId, courseWorkStates: ["PUBLISHED"], orderBy: "updateTime desc", pageSize: 100,
-        }));
+        const { items } = await listCourseWork(services, courseId, { orderBy: "updateTime desc" });
         const q = value.trim().toLowerCase();
-        return (response.data.courseWork ?? [])
+        return items
           .filter((w) => !q || (w.title ?? "").toLowerCase().includes(q))
           .map((w) => w.id ?? "")
           .filter(Boolean)
@@ -357,9 +494,77 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
       const assignmentId = String(variables.assignmentId ?? "");
       if (!courseId || !assignmentId) throw new Error("courseId and assignmentId are required.");
       const services = await getServices();
-      const courses = await listCourses(services, { includeArchived: true });
+      const { items: courses } = await listCourses(services, { includeArchived: true });
       const status = await getAssignmentDetail(services, courseId, courses.find((c) => c.id === courseId)?.name ?? courseId, assignmentId, 1000);
       return { contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(status, null, 2) }] };
+    } catch (error) {
+      throw new Error(`Request failed: ${(error instanceof Error ? error.message : String(error)).replace(/[.]+$/, "")}.`);
+    }
+  });
+
+  server.resource("material", new ResourceTemplate("classroom://courses/{courseId}/materials/{materialId}", {
+    list: undefined,
+    complete: {
+      materialId: async (value, context) => {
+        const courseId = context?.arguments?.courseId;
+        if (!courseId) return [];
+        const services = await getServices();
+        const { items } = await listMaterials(services, courseId);
+        const q = value.trim().toLowerCase();
+        return items
+          .filter((m) => !q || (m.title ?? "").toLowerCase().includes(q))
+          .map((m) => m.id ?? "")
+          .filter(Boolean)
+          .slice(0, 100);
+      },
+    },
+  }), {
+    title: "Material detail",
+    description: "JSON reader for one course material: description, attachments with Drive file ids (pass to download_files), link. {materialId} autocompletes from material titles once courseId is known. Every search hit of kind=material is readable here.",
+    mimeType: "application/json",
+  }, async (uri, variables) => {
+    try {
+      const courseId = String(variables.courseId ?? "");
+      const materialId = String(variables.materialId ?? "");
+      if (!courseId || !materialId) throw new Error("courseId and materialId are required.");
+      const services = await getServices();
+      const { items: courses } = await listCourses(services, { includeArchived: true });
+      const body = await getMaterialDetail(services, courseId, courses.find((c) => c.id === courseId)?.name ?? courseId, materialId);
+      return { contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(body, null, 2) }] };
+    } catch (error) {
+      throw new Error(`Request failed: ${(error instanceof Error ? error.message : String(error)).replace(/[.]+$/, "")}.`);
+    }
+  });
+
+  server.resource("announcement", new ResourceTemplate("classroom://courses/{courseId}/announcements/{announcementId}", {
+    list: undefined,
+    complete: {
+      announcementId: async (value, context) => {
+        const courseId = context?.arguments?.courseId;
+        if (!courseId) return [];
+        const services = await getServices();
+        const { items } = await listAnnouncements(services, courseId);
+        const q = value.trim().toLowerCase();
+        return items
+          .filter((a) => !q || (a.text ?? "").toLowerCase().includes(q))
+          .map((a) => a.id ?? "")
+          .filter(Boolean)
+          .slice(0, 100);
+      },
+    },
+  }), {
+    title: "Announcement detail",
+    description: "JSON reader for one course announcement: full text, attachments with Drive file ids, link. {announcementId} autocompletes from announcement text once courseId is known. Every search hit of kind=announcement is readable here.",
+    mimeType: "application/json",
+  }, async (uri, variables) => {
+    try {
+      const courseId = String(variables.courseId ?? "");
+      const announcementId = String(variables.announcementId ?? "");
+      if (!courseId || !announcementId) throw new Error("courseId and announcementId are required.");
+      const services = await getServices();
+      const { items: courses } = await listCourses(services, { includeArchived: true });
+      const body = await getAnnouncementDetail(services, courseId, courses.find((c) => c.id === courseId)?.name ?? courseId, announcementId);
+      return { contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(body, null, 2) }] };
     } catch (error) {
       throw new Error(`Request failed: ${(error instanceof Error ? error.message : String(error)).replace(/[.]+$/, "")}.`);
     }
@@ -368,13 +573,16 @@ export function buildServer(getServices: () => Promise<Services>): McpServer {
   return server;
 }
 
-async function assignmentLink(services: Services, courseId: string, assignmentId: string): Promise<string> {
+async function assignmentLink(services: Services, courseId: string, assignmentId: string): Promise<{ url: string; title: string | null }> {
   try {
     const work = await withRetry(`courseWork.get ${assignmentId}`, () =>
       services.classroom.courses.courseWork.get({ courseId, id: assignmentId }));
-    return work.data.alternateLink ?? `https://classroom.google.com/c/${courseId}`;
+    return {
+      url: work.data.alternateLink ?? `https://classroom.google.com/c/${courseId}`,
+      title: work.data.title ?? null,
+    };
   } catch {
-    return `https://classroom.google.com/c/${courseId}`;
+    return { url: `https://classroom.google.com/c/${courseId}`, title: null };
   }
 }
 

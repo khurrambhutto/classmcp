@@ -1,0 +1,34 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  id-token: write # npm trusted publishing + provenance
+
+jobs:
+  publish:
+    name: publish to npm
+    runs-on: ubuntu-latest
+    environment: npm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+      - name: Use an npm version with trusted publishing
+        run: npm install --global npm@latest
+      - run: npm ci
+      - run: npm run check
+      - run: npm run pack:verify
+      - name: Tag must match package.json version
+        run: |
+          node -e "const p=require('./package.json');const t=process.env.GITHUB_REF_NAME.replace(/^v/,'');if(p.version!==t){console.error('tag '+t+' does not match package version '+p.version);process.exit(1)}"
+      - name: Publish (prereleases go to the next tag)
+        run: |
+          TAG=latest
+          case "$(node -p "require('./package.json').version")" in *-*) TAG=next ;; esac
+          npm publish --access public --provenance --tag "$TAG"
