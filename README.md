@@ -26,6 +26,48 @@ Zero-install alternative (slower first start):
 npx -y gcrclassmcp@0.3.0 serve
 ```
 
+## Set it up with your agent
+
+Copy the block below into your agent's chat. It installs the package, registers the server with whichever host it is running in, and verifies that the five tools answer. It stops and asks you for the two steps that need your browser and Google account: creating the Desktop OAuth client and approving consent.
+
+```text
+Set up the classmcp MCP server on this machine and register it with you.
+
+The npm package is gcrclassmcp. The command is classmcp.
+
+Do these steps yourself:
+1. Check that "node --version" is 20 or newer. If it is missing or older, stop and tell me exactly what to install.
+2. Install the server: npm install --global gcrclassmcp
+3. Run "classmcp --version", then "classmcp doctor". Read every line of doctor output.
+4. Fix what doctor reports when the fix is local:
+   - Credentials missing: continue at step 8.
+   - Token corrupt, expired, or missing scopes: run "classmcp setup" and continue at step 9.
+   - Keychain unavailable: confirm doctor says token storage is "file", and that ~/.classmcp/tokens.json has mode 0600. If not, run "classmcp setup" again.
+5. Register the server with the host you are running in. Use the host CLI when you know its exact syntax, otherwise edit the config file. Preserve every existing entry and comment:
+   - Codex: codex mcp add classmcp -- classmcp serve
+   - Claude Code: claude mcp add classmcp -- classmcp serve
+   - OpenCode: in ~/.config/opencode/opencode.jsonc add under the "mcp" key: "classmcp": {"type":"local","command":["classmcp","serve"],"enabled":true,"timeout":60000}
+   - Cursor: add "classmcp": {"command":"classmcp","args":["serve"]} under "mcpServers" in ~/.cursor/mcp.json
+   - Antigravity: same shape as Cursor, in ~/.config/antigravity/mcp.json
+   Never register a temporary npx cache path. Never invent config keys.
+6. Reload the MCP connection if your host needs it, then confirm these five tools are listed: get_overview, get_assignment, search, download_files, submit_work.
+7. Call get_overview with view="courses". If it returns courses, setup is done. Report the course names and stop.
+
+Ask me for help only where I am required:
+8. If the OAuth client JSON is missing, ask me to create one. Instructions for me: in Google Cloud Console enable the Classroom API and the Drive API, create an OAuth client ID of type "Desktop app", download the JSON into ~/Downloads, and tell you when it is there.
+9. Run "classmcp setup" and tell me to finish the consent page it opens in my browser. Wait for my confirmation before you continue.
+10. After I confirm, run "classmcp doctor" again and repeat the get_overview view="courses" call from step 7.
+
+Optional:
+11. Ask me if downloads should go somewhere other than ~/Downloads. If yes, add CLASSMCP_WORKDIR to this host's MCP server env and confirm the value.
+
+Rules:
+- Never print client secrets or tokens, and never read ~/.classmcp/credentials.json or ~/.classmcp/tokens.json into the conversation.
+- Only use the credential file I provide. Never create or modify one yourself.
+- If a step fails, show me the exact error and stop. Do not guess, and do not retry with made-up values.
+- Finish by printing the doctor summary and the five tool names.
+```
+
 ## Google Cloud setup (once)
 
 1. Create a project at <https://console.cloud.google.com>.
