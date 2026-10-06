@@ -33,7 +33,7 @@ Copy the block below into your agent's chat. It installs the package, registers 
 ```text
 Set up the classmcp MCP server on this machine and register it with you.
 
-The npm package is gcrclassmcp. The command is classmcp.
+The npm package is gcrclassmcp. The command is classmcp. The repository is https://github.com/khurrambhutto/classmcp. Read its README if you need the exact host configuration or the troubleshooting table.
 
 Do these steps yourself:
 1. Check that "node --version" is 20 or newer. If it is missing or older, stop and tell me exactly what to install.
@@ -43,7 +43,7 @@ Do these steps yourself:
    - Credentials missing: continue at step 8.
    - Token corrupt, expired, or missing scopes: run "classmcp setup" and continue at step 9.
    - Keychain unavailable: confirm doctor says token storage is "file", and that ~/.classmcp/tokens.json has mode 0600. If not, run "classmcp setup" again.
-5. Register the server with the host you are running in. Use the host CLI when you know its exact syntax, otherwise edit the config file. Preserve every existing entry and comment:
+5. Register the server with the host you are running in. Use the host CLI when you know its exact syntax, otherwise edit the config file. Preserve every existing entry and comment. Per-host shapes are documented at https://github.com/khurrambhutto/classmcp#hosts; the common ones are:
    - Codex: codex mcp add classmcp -- classmcp serve
    - Claude Code: claude mcp add classmcp -- classmcp serve
    - OpenCode: in ~/.config/opencode/opencode.jsonc add under the "mcp" key: "classmcp": {"type":"local","command":["classmcp","serve"],"enabled":true,"timeout":60000}
