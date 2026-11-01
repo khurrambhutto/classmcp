@@ -1,220 +1,115 @@
 # classmcp
 
-Local stdio MCP server for a student's Google Classroom: one-call digests,
-search, handout downloads, and best-effort submissions for coding agents.
+classmcp connects a coding agent to your Google Classroom account through the
+Model Context Protocol (MCP). It runs on your computer and uses your own Google
+OAuth Desktop app credentials. There is no hosted classmcp service or telemetry.
 
-- Runs on your machine, one Google account per install, no hosted service, no telemetry.
-- Uses your own Google OAuth **Desktop app** client; tokens stay in the OS keychain
-  (or a local file where no keychain exists).
-- Package: [`gcrclassmcp`](https://www.npmjs.com/package/gcrclassmcp) on npm. The command is `classmcp`.
+You can ask an agent to list upcoming or missing work, find an assignment,
+download handouts, or prepare a submission. Submission changes are subject to
+[Google's project restriction](#submission-limits).
 
-## Quick start
+The npm package is named `gcrclassmcp`; the command is `classmcp`. You need
+Node.js 20 or newer and a Google account with access to Classroom.
+
+## Install
+
+The package has not yet been published to npm. Until it is published, clone the
+repository and install from the project directory:
+
+```bash
+git clone https://github.com/khurrambhutto/classmcp.git
+cd classmcp
+npm ci
+npm install --global .
+classmcp --version
+```
+
+After publication, install or update the stable package with:
 
 ```bash
 npm install --global gcrclassmcp
-classmcp setup      # store credentials, authorize Google, offer host config
-classmcp doctor     # verify everything without printing secrets
 ```
 
-Then register the server with your agent host (copy-paste configs below) and ask:
+For a published release candidate, use `npm install --global gcrclassmcp@next`.
+See [RELEASE.md](RELEASE.md) for the publication process.
 
-> "What's due this week?" · "Find the photosynthesis lab" · "Download the handouts for the waves essay"
+## Connect Google Classroom
 
-Zero-install alternative (slower first start):
+1. Open [Google Cloud Console](https://console.cloud.google.com/) and create a
+   project.
+2. Enable the Google Classroom API and Google Drive API in that project.
+3. Configure the OAuth consent screen. Use an External audience for a personal
+   Google account or an Internal audience for an eligible Workspace account.
+   If the app is in Testing, add your account as a test user.
+4. Create an OAuth client ID with application type **Desktop app**. Download
+   its JSON file to your Downloads folder.
+5. Run:
 
-```bash
-npx -y gcrclassmcp@0.3.0 serve
-```
+   ```bash
+   classmcp setup
+   ```
 
-## Set it up with your agent
+   Setup looks for `client_secret*.json` in Downloads and asks for a path if it
+   cannot find one. It validates and stores the credentials, opens Google's
+   consent page, verifies Classroom access, and offers to configure detected
+   agent hosts.
+6. Run `classmcp doctor`. Resolve any `fail` lines. On Windows, review the
+   config folder's access controls as described in [Security](#security).
+7. [Register the server with your agent](#connect-an-agent) if setup did not do
+   so. Reconnect or restart the host if needed.
+8. Ask your agent to list your courses. A successful `get_overview` call with
+   `view: "courses"` confirms that the connection works. An empty course list
+   can be valid for an account with no courses.
 
-Copy the block below into your agent's chat. It installs the package, registers the server with whichever host it is running in, and verifies that the five tools answer. It stops and asks you for the two steps that need your browser and Google account: creating the Desktop OAuth client and approving consent.
+Use a dedicated test account while evaluating the server. Never paste your
+client secret or token files into an agent conversation.
+
+## Ask an agent to set it up
+
+You can copy this request into a coding agent with terminal access. Complete
+Google's browser steps yourself when the agent asks.
 
 ```text
-Set up the classmcp MCP server on this machine and register it with you.
+Set up the classmcp MCP server from https://github.com/khurrambhutto/classmcp.
+The package is gcrclassmcp and the command is classmcp. Read its README first.
 
-The npm package is gcrclassmcp. The command is classmcp. The repository is https://github.com/khurrambhutto/classmcp. Read its README if you need the exact host configuration or the troubleshooting table.
+1. Check that Node.js is version 20 or newer. If it is not, stop and tell me
+   what is missing.
+2. Install classmcp using the README's current installation instructions. Run
+   classmcp --version to confirm the command is available.
+3. If I have not already created Desktop app OAuth credentials, ask me to
+   follow the Google Cloud setup in the README. Do not create credentials on
+   my behalf or request their contents in chat.
+4. Run classmcp setup interactively. Let me approve Google's consent page and
+   answer any prompts that require my input.
+5. Run classmcp doctor. Explain any failures without printing secrets. On
+   Windows, remind me to verify who can access the config folder.
+6. Register classmcp with this host using the README's host instructions.
+   Preserve existing configuration entries and comments. Do not register a
+   temporary npx cache path.
+7. Reconnect the server, confirm that all five tools are listed, and call
+   get_overview with view="courses". Report whether the call succeeded. An
+   empty course list is valid; report the result rather than treating it as an
+   error.
 
-Do these steps yourself:
-1. Check that "node --version" is 20 or newer. If it is missing or older, stop and tell me exactly what to install.
-2. Install the server: npm install --global gcrclassmcp
-3. Run "classmcp --version", then "classmcp doctor". Read every line of doctor output.
-4. Fix what doctor reports when the fix is local:
-   - Credentials missing: continue at step 8.
-   - Token corrupt, expired, or missing scopes: run "classmcp setup" and continue at step 9.
-   - Keychain unavailable: confirm doctor says token storage is "file". On macOS or Linux, confirm ~/.classmcp/tokens.json has mode 0600. On Windows, check that the config folder's access-control list permits only trusted accounts.
-5. Register the server with the host you are running in. Use the host CLI when you know its exact syntax, otherwise edit the config file. Preserve every existing entry and comment. Per-host shapes are documented at https://github.com/khurrambhutto/classmcp#hosts; the common ones are:
-   - Codex: codex mcp add classmcp -- classmcp serve
-   - Claude Code: claude mcp add classmcp -- classmcp serve
-   - OpenCode: in ~/.config/opencode/opencode.jsonc add under the "mcp" key: "classmcp": {"type":"local","command":["classmcp","serve"],"enabled":true,"timeout":60000}
-   - Cursor: add "classmcp": {"command":"classmcp","args":["serve"]} under "mcpServers" in ~/.cursor/mcp.json
-   - Antigravity: same shape as Cursor, in ~/.config/antigravity/mcp.json
-   Never register a temporary npx cache path. Never invent config keys.
-6. Reload the MCP connection if your host needs it, then confirm these five tools are listed: get_overview, get_assignment, search, download_files, submit_work.
-7. Call get_overview with view="courses". If it returns courses, setup is done. Report the course names and stop.
-
-Ask me for help only where I am required:
-8. If the OAuth client JSON is missing, ask me to create one. Instructions for me: in Google Cloud Console enable the Classroom API and the Drive API, create an OAuth client ID of type "Desktop app", download the JSON into ~/Downloads, and tell you when it is there.
-9. Run "classmcp setup" and tell me to finish the consent page it opens in my browser. Wait for my confirmation before you continue.
-10. After I confirm, run "classmcp doctor" again and repeat the get_overview view="courses" call from step 7.
-
-Optional:
-11. Ask me if downloads should go somewhere other than ~/Downloads. If yes, add CLASSMCP_WORKDIR to this host's MCP server env and confirm the value.
-
-Rules:
-- Never print client secrets or tokens, and never read ~/.classmcp/credentials.json or ~/.classmcp/tokens.json into the conversation.
-- Only use the credential file I provide. Never create or modify one yourself.
-- If a step fails, show me the exact error and stop. Do not guess, and do not retry with made-up values.
-- Finish by printing the doctor summary and the five tool names.
+Never print or paste credentials, tokens, or their file contents. If a step
+fails, report the error and stop instead of inventing a value or result.
 ```
 
-## Google Cloud setup (once)
+## Connect an agent
 
-1. Create a project at <https://console.cloud.google.com>.
-2. Enable **Google Classroom API** and **Google Drive API**
-   (APIs & Services → Library).
-3. Configure the OAuth consent screen:
-   - User type: **External** (personal Gmail) or **Internal** (Workspace school account).
-   - While in "Testing", add your own account under **Test users**.
-4. Create credentials → **OAuth client ID** → Application type **Desktop app**.
-5. Download the JSON and run `classmcp setup`; it finds `client_secret*.json`
-   in `~/Downloads` or asks for the path.
+All hosts start `classmcp serve` over stdio. Use the `classmcp` executable from
+a global install, or an absolute path to Node and this repository's
+`dist/cli.js`. Do not register a temporary `npx` cache path.
 
-`setup` validates and stores the client, opens the Google consent page on a
-loopback callback, saves tokens, verifies access, and can register the server
-in detected host configs. Secrets are never printed.
-
-## Requirements
-
-- Node.js >= 20.
-- A student Google account (classmcp always acts as `me`).
-
-## Tools
-
-Five tools. Every call returns compact JSON in `content[0].text` plus typed
-`structuredContent` (validated against its `outputSchema`). Failures return
-`isError: true` with an actionable message; reads retry Google 429/5xx and
-network errors with backoff, while uploads/attach/turn-in are never retried
-because they are not idempotent. Partial success is reported in-band
-(`errors[]` with an `operation`, per-file results), not as a failure.
-
-| Tool | Answers | Key parameters |
-| --- | --- | --- |
-| `get_overview` | Digest of the whole classroom in one call | `view` `due`\|`missing`\|`new`\|`grades`\|`courses` (default `due`); `window` 1-30 days (default 7); `limit` 1-50 (default 20); `query` text filter; `includeArchived` also scans ARCHIVED courses (`view=courses` always lists every course; the result reports `skippedArchived`); `detail` `concise`\|`detailed` |
-| `get_assignment` | Full detail of one assignment: prompt, due/`daysLeft`, `myState`/late/grade, rubric (when present), teacher attachments with Drive file ids, my attachments, submission history, link | course + assignment fuzzy ref or exact ids; `maxDescChars` 0-2000 (default 400) trims the prompt |
-| `search` | Keyword search across assignments, materials, and announcements (all words must match title/description/text); hits carry normalized `attachments` with Drive ids, so any hit is downloadable | `query` (non-empty); `kinds` filter (at least one when provided); `limit` 1-30 (default 10); optional course filter; `includeArchived`; trimmed snippets |
-| `download_files` | One assignment's, material's, or announcement's attachments — or explicit file ids — on local disk | `fileIds` ≤20 or every attachment; `exportAs` `pdf`\|`docx`\|`xlsx`\|`pptx` for Google Docs/Sheets/Slides (defaults `docx`/`xlsx`/`pptx`); `destinationDir` must resolve inside `~/Downloads` or `$CLASSMCP_WORKDIR`; per-file partial success |
-| `submit_work` | Best-effort submission (see limitations) | ≤10 local files (100 MB each) + ≤10 Drive ids + 1 link (≤20 combined); `turnIn: true` additionally requires `confirmTurnIn: "I confirm turn in"` |
-
-Fuzzy refs: every tool accepts a course name ("Physics 101") or item title
-fragment ("photosynthesis lab") anywhere an id is expected — no discovery
-round-trip needed. Exact ids skip the listing and go straight to the item,
-which keeps repeated calls fast.
-
-Long lists are paginated internally. `get_overview`, `search`, and course
-readers report both flavors of truncation: `truncated` (the result limit cut
-matches; narrow the query) and `scanTruncated` (an internal safety budget
-stopped pagination; very old items may not have been seen).
-
-## MCP resources
-
-Every kind `search` returns has a reader; the resource payload is the same JSON
-the tools produce:
-
-- `classroom://courses/{courseId}` — course reader: open/missing work, recent
-  materials with attachments, recent announcements, topics.
-- `classroom://courses/{courseId}/assignments/{assignmentId}` — full assignment
-  detail (same shape as `get_assignment`).
-- `classroom://courses/{courseId}/materials/{materialId}` — material detail with
-  attachment Drive ids.
-- `classroom://courses/{courseId}/announcements/{announcementId}` — announcement
-  detail with full text and attachments.
-
-All four autocomplete their ids from names/titles. Nullable enrichment fields
-carry reason codes instead of bare nulls: `promptStatus`/`descriptionStatus`/
-`textStatus` (`full`\|`trimmed`\|`empty`), `rubricStatus`/`topicStatus`
-(`present`\|`none`\|`denied`\|`error`), `historyStatus`
-(`present`\|`none`\|`unavailable`), `topicsStatus` — so "no rubric" is never
-confused with "could not read the rubric".
-
-## Security and privacy
-
-- **Everything stays local.** Credentials, tokens, and downloaded files never
-  leave your machine; there is no backend and no telemetry.
-- **File confinement.** Uploads and downloads are restricted to `~/Downloads`
-  (plus `$CLASSMCP_WORKDIR`). Paths are canonicalized with `realpath`, so
-  symlinks cannot escape the allowed roots. Downloads never follow destination
-  symlinks, never overwrite existing files (collisions become `name (1).pdf`),
-  and delete partial files on failure.
-- **Resource limits.** Downloads are capped at 250 MB per file and 500 MB per
-  call, enforced while streaming.
-- **Permissions.** On macOS and Linux, `~/.classmcp` is `0700` and
-  `credentials.json` and the fallback `tokens.json` are `0600`. Setup and doctor
-  can repair these modes. Windows uses access-control lists instead of Unix
-  modes; files inherit their folder's access controls and classmcp does not
-  verify or repair those ACLs. Restrict the config folder to trusted accounts.
-- **OAuth.** Loopback redirect with a random `state`, a 5-minute timeout, and
-  listener cleanup on every path. Desktop-app clients only.
-- **Scopes.** `classroom.courses.readonly`, `classroom.coursework.me`,
-  `classroom.courseworkmaterials.readonly`, `classroom.announcements.readonly`,
-  `classroom.student-submissions.me.readonly`, `classroom.topics.readonly`,
-  `drive.readonly`, `drive.file`.
-- **Writes are conservative.** `submit_work` stops before turn-in if any upload
-  or attachment step fails, and `blocked: true` results are normal outcomes,
-  not errors.
-
-## Known limitations
-
-- **Google blocks third-party submissions.** Only the Developer Console project
-  that created an assignment may modify its submissions, so `modifyAttachments`
-  and `turnIn` return `403 @ProjectPermissionDenied` on teacher-created work
-  (verified 2026-09). `submit_work` is best-effort by design: it uploads your
-  files to Drive, attempts attach/turn-in, and returns `blocked: true` with the
-  Drive links plus the Classroom assignment link to finish in the UI. classmcp
-  does not and cannot bypass this restriction.
-- **Question answers** (short answer / multiple choice) cannot be set via the
-  API for the same reason and are not offered.
-- **No detach/unsubmit tools**: the API has only `addAttachments` (no
-  `removeAttachments`), and `reclaim` is blocked as above.
-- **Topics** require `classroom.topics.readonly`. If you authorized before
-  0.3.0, rerun `classmcp setup`; until then `topicsStatus` is `denied`.
-- **Archived courses** are excluded from `due`/`missing`/`new`/`grades` unless
-  `includeArchived: true`; `view=courses` always lists them.
-
-## Configuration
-
-- `CLASSMCP_WORKDIR` — adds a second allowed file root next to `~/Downloads`.
-  The default download directory becomes `<root>/classmcp`, where `<root>` is
-  `$CLASSMCP_WORKDIR` when set, else `~/Downloads`.
-- `CLASSMCP_CONFIG_DIR` — overrides `~/.classmcp` (tests, multi-account setups).
-- `~/.classmcp/credentials.json` — OAuth Desktop client JSON (mode 0600 on macOS and Linux).
-- Tokens — OS keychain via keytar (service `classmcp`, account `oauth-tokens`);
-  fallback `~/.classmcp/tokens.json` (mode 0600 on macOS and Linux; inherited ACLs on Windows).
-
-## Hosts
-
-All hosts use stdio. `classmcp setup` offers to write these configs; the
-command shown in the examples works for both a global install (`classmcp`) and
-an explicit Node path, and `setup` never writes a transient `npx` cache path.
-
-<!-- Tested versions are recorded in CHANGELOG.md. -->
-
-| Host | Where | Validated |
-| --- | --- | --- |
-| Codex CLI | `~/.codex/config.toml` or `codex mcp add` | registered, listed, and inspected via an isolated `CODEX_HOME` (0.3.0-rc.1) |
-| OpenCode | `~/.config/opencode/opencode.jsonc` | `opencode mcp list` → `classmcp connected` (0.3.0-rc.1) |
-| Claude Code | `~/.claude.json` (or `claude mcp add`) | config shape documented (CLI not available in the release environment) |
-| Cursor | `~/.cursor/mcp.json` | config shape documented |
-| Antigravity | `~/.config/antigravity/mcp.json` | config shape documented |
-
-**Codex** — preferred CLI registration:
+### Codex CLI
 
 ```bash
 codex mcp add classmcp -- classmcp serve
 codex mcp list
 ```
 
-Or `~/.codex/config.toml`:
+Alternatively, add this entry to `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.classmcp]
@@ -224,7 +119,9 @@ startup_timeout_sec = 30
 tool_timeout_sec = 300
 ```
 
-**OpenCode** — `~/.config/opencode/opencode.jsonc` (note: `mcp`, not `mcpServers`):
+### OpenCode
+
+Add the entry under `mcp` in `~/.config/opencode/opencode.jsonc`:
 
 ```jsonc
 {
@@ -239,15 +136,17 @@ tool_timeout_sec = 300
 }
 ```
 
-Verify: `opencode mcp list` → `classmcp connected`.
+Run `opencode mcp list` and confirm that `classmcp` is connected. If OpenCode
+cannot find the executable, use an absolute Node path and the path to
+`dist/cli.js` in the `command` array.
 
-**Claude Code**:
+### Claude Code
 
 ```bash
 claude mcp add classmcp -- classmcp serve
 ```
 
-Or `~/.claude.json` (user scope):
+Alternatively, add the following entry under `mcpServers` in `~/.claude.json`:
 
 ```json
 {
@@ -260,68 +159,177 @@ Or `~/.claude.json` (user scope):
 }
 ```
 
-**Cursor / Antigravity** — same `mcpServers` shape:
+### Cursor and Antigravity
+
+Add an entry under `mcpServers` in `~/.cursor/mcp.json` for Cursor or
+`~/.config/antigravity/mcp.json` for Antigravity:
 
 ```json
 {
   "mcpServers": {
     "classmcp": {
       "command": "classmcp",
-      "args": ["serve"],
-      "env": { "CLASSMCP_WORKDIR": "/home/you/school" }
+      "args": ["serve"]
     }
   }
 }
 ```
 
-**MCP Inspector**:
+Preserve any existing entries in your host configuration. To allow a working
+folder in addition to Downloads, set `CLASSMCP_WORKDIR` in the host's server
+environment. See [Configuration](#configuration).
 
-```bash
-npx @modelcontextprotocol/inspector --cli classmcp serve
+Codex and OpenCode registration were checked during development. The Claude
+Code, Cursor, and Antigravity examples describe their configuration shapes;
+they were not all validated against a running host for this release candidate.
+See [CHANGELOG.md](CHANGELOG.md) for the recorded validation.
+
+## Use classmcp
+
+Try these requests in your agent:
+
+- "What work is due this week?"
+- "Find the photosynthesis lab."
+- "Download the handouts for the waves essay."
+- "Show me the missing work in Physics."
+
+The server provides five tools:
+
+| Tool | Purpose | Important inputs |
+| --- | --- | --- |
+| `get_overview` | List due, missing, new, or graded work, or list courses. | `view` defaults to `due`. `window` is 1 to 30 days, default 7. `limit` is 1 to 50, default 20. `includeArchived` includes archived courses for work views. |
+| `get_assignment` | Read one assignment, including its prompt, grade, attachments, rubric, and submission history when available. | Supply a course and assignment name or ID. `maxDescChars` is 0 to 2,000, default 400. |
+| `search` | Search assignment, material, and announcement titles and text. All query words must match. | `query` is required. `kinds` narrows the search. `limit` is 1 to 30, default 10. |
+| `download_files` | Download attachments for an item or the specified Drive file IDs. | Up to 20 `fileIds`. Choose `exportAs` for Google Docs, Sheets, or Slides. The destination must be in an allowed root. |
+| `submit_work` | Upload files and attempt to attach or turn in coursework. | Up to 10 local files, 10 Drive IDs, and one link, with at most 20 items combined. Each local file can be up to 100 MB. `turnIn: true` requires `confirmTurnIn: "I confirm turn in"`. |
+
+Use a course name or an exact course ID. Item tools accept the corresponding
+name or ID. An exact ID skips name lookup; use IDs when names are ambiguous.
+For `download_files`, passing `fileIds` selects only those files, even when an
+assignment, material, or announcement is also specified. Google Docs, Sheets,
+and Slides export to DOCX, XLSX, and PPTX by default. You can request `pdf`,
+`docx`, `xlsx`, or `pptx` with `exportAs`.
+
+`get_overview` excludes archived courses from work views unless
+`includeArchived` is true. The `courses` view lists archived courses regardless
+of that setting. `view: "missing"` finds overdue work; the default `due` view
+shows upcoming work.
+
+Tool responses include JSON text and `structuredContent`. Inspect `errors` and
+per-file results for partial failures. `truncated` means the requested result
+limit cut the list; narrow the query to see more. `scanTruncated` means an
+internal scan limit stopped pagination, so older items may be missing. Reads
+retry transient Google errors; uploads, attachment changes, and turn-in calls
+are not retried.
+
+In an agent's `execute` code runtime, use bracket notation for ClassMCP tools:
+
+```javascript
+await tools.classmcp["get_overview"]({ view: "courses" });
 ```
 
-## Doctor and troubleshooting
+### Submission limits
 
-```bash
-classmcp doctor        # prints ok/warn/fail lines; exit code 1 on failure
-```
+Google restricts submission changes to the developer project that created the
+coursework. For teacher-created coursework, third-party attachment and turn-in
+calls can return `403 @ProjectPermissionDenied`. `submit_work` is best effort:
+it uploads requested files to Drive, attempts the requested Classroom action,
+and reports `blocked: true` with links when Google rejects it. Follow the
+returned Classroom link to finish the submission. The tool does not attempt
+turn-in after an upload or attachment failure.
 
-It checks Node, credentials presence and permissions, token storage and scopes,
-Classroom and Drive reachability, host configs, and the required scope list —
-without printing secret values.
+Question answers cannot be set through this tool. The server also has no
+remove-attachment or unsubmit tool.
 
-| Symptom | Fix |
+## MCP resources
+
+Hosts that support MCP resources can read these URIs:
+
+| Resource | Content |
 | --- | --- |
-| `Google is not connected` | Run `classmcp setup`. |
-| `missing scope(s)` warning | Rerun `classmcp setup` to reauthorize (0.3.0 adds topics). |
-| `Stored Google tokens are corrupt` | Rerun `classmcp setup`. |
-| Host shows the server as failed/timeout | Use the global `classmcp` command (or an absolute Node path), not an `npx` cache path; increase the host startup timeout to 30s+. |
-| Downloads refused | Destination must be inside `~/Downloads` or `$CLASSMCP_WORKDIR` (set it in the host's `env`, not per call). |
-| `blocked: true` from `submit_work` | Expected on teacher-created work; finish via the returned Classroom link. |
+| `classroom://courses/{courseId}` | Course work, materials, announcements, and topics. |
+| `classroom://courses/{courseId}/assignments/{assignmentId}` | Assignment detail. |
+| `classroom://courses/{courseId}/materials/{materialId}` | Material detail and attachment IDs. |
+| `classroom://courses/{courseId}/announcements/{announcementId}` | Announcement text and attachments. |
 
-Logs go to stderr only; stdout carries MCP traffic exclusively.
+Resource IDs support name and title completion. Status fields distinguish
+missing data from denied or unavailable data. For example, `rubricStatus` can
+be `present`, `none`, `denied`, or `error`.
 
-## Upgrade and uninstall
+## Configuration
+
+| Setting | Purpose |
+| --- | --- |
+| `CLASSMCP_WORKDIR` | Adds an allowed root for uploads and downloads. The default download directory becomes `<root>/classmcp`. Set it in the MCP server's host environment. |
+| `CLASSMCP_CONFIG_DIR` | Overrides the default `~/.classmcp` configuration directory. |
+| `~/.classmcp/credentials.json` | Stores the Google OAuth Desktop client JSON by default. |
+| `~/.classmcp/tokens.json` | Stores tokens only when OS credential storage is unavailable. |
+
+Without `CLASSMCP_WORKDIR`, the default download directory is
+`~/Downloads/classmcp`. Local uploads and downloads must resolve inside
+`~/Downloads` or `CLASSMCP_WORKDIR`. See [Security](#security) for permissions.
+
+## Security
+
+classmcp sends requests to Google APIs from your computer. Credentials and
+tokens stay in local storage; the server does not send them to a classmcp
+backend. Tokens use the OS keychain when available and a local file otherwise.
+
+On macOS and Linux, classmcp sets the config directory to mode `0700` and
+secret files to `0600`. Setup and doctor can repair Unix modes. Windows uses
+access-control lists instead of Unix modes. Files inherit their folder's access
+controls, and classmcp does not verify or repair those ACLs. Restrict the
+config folder to trusted accounts.
+
+Paths pass canonical `realpath` checks. Downloads do not follow destination
+symlinks or overwrite existing files; a collision creates a name such as
+`handout (1).pdf`. Partial downloads are removed on failure. Download limits
+are 250 MB per file and 500 MB per call.
+
+Google authorization uses a loopback callback with a random state and a
+five-minute timeout. The requested scopes are `classroom.courses.readonly`,
+`classroom.coursework.me`, `classroom.courseworkmaterials.readonly`,
+`classroom.announcements.readonly`, `classroom.student-submissions.me.readonly`,
+`classroom.topics.readonly`, `drive.readonly`, and `drive.file`.
+
+Report security issues using the process in [SECURITY.md](SECURITY.md).
+
+## Troubleshooting
+
+Run `classmcp doctor` to inspect credentials, token storage, scopes, API
+connectivity, and host configuration. It reports `ok`, `warn`, and `fail`
+lines without printing secret values. A failure gives the command exit code 1.
+
+| Problem | Action |
+| --- | --- |
+| Google is not connected, a token is corrupt, or a scope is missing. | Run `classmcp setup` to authorize again. Authorization from before 0.3.0 may lack the topics scope. |
+| The host reports a timeout or cannot start the server. | Use the global executable or absolute Node and script paths. Increase the host's startup timeout. |
+| A file path is refused. | Use a path inside `~/Downloads` or the host's configured `CLASSMCP_WORKDIR`. |
+| `submit_work` returns `blocked: true`. | Follow the returned Classroom link. See [Submission limits](#submission-limits). |
+
+The server writes logs to stderr. Its stdout is reserved for MCP messages.
+
+## Uninstall
+
+Remove the globally installed command with:
 
 ```bash
-npm install --global gcrclassmcp@latest
 npm uninstall --global gcrclassmcp
-rm -rf ~/.classmcp          # optional: removes credentials and tokens
 ```
 
-After upgrading across a scope change (e.g. 0.2 → 0.3), run `classmcp setup`
-once to refresh consent.
+Uninstalling the package does not delete your local credentials or tokens.
+Remove the config directory separately if you no longer need those files.
 
 ## Development
 
 ```bash
 npm ci
-npm run typecheck && npm run test && npm run build
-npm run pack:verify          # pack, install into a temp project, MCP smoke test
+npm run check
+npm run pack:verify
 node dist/cli.js serve
 ```
 
-Release process and CI gates: [RELEASE.md](RELEASE.md). Security policy:
-[SECURITY.md](SECURITY.md). Changes: [CHANGELOG.md](CHANGELOG.md).
-
-MIT.
+`npm run check` runs typechecking, tests, and the build. `pack:verify` packs the
+project, installs it in a temporary project, and checks MCP startup and tool
+discovery. See [RELEASE.md](RELEASE.md) for release gates and
+[CHANGELOG.md](CHANGELOG.md) for changes. The project uses the [MIT license](LICENSE).
