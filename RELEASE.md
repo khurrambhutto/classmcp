@@ -6,7 +6,9 @@ Every published version must pass this list. Automated gates run in
 
 ## 0. Preconditions
 
-- [ ] `npm whoami` shows the publishing account; `gcrclassmcp` is owned by it.
+- [ ] `npm whoami` shows the publishing account. For the first publication,
+      confirm the package name is available; afterward, confirm it is owned by
+      that account.
 - [ ] `npm view gcrclassmcp` does not already contain the version being shipped.
 - [ ] `git status` is clean on the release branch (`release/x.y.z`).
 - [ ] CHANGELOG has a section for the version with a date.
@@ -37,15 +39,25 @@ npm run pack:verify           # tarball install + MCP stdio smoke test
 - [ ] No secret values appear in tool output, errors, or logs.
 - [ ] MCP Inspector reports 0 schema errors:
       `npx @modelcontextprotocol/inspector --cli classmcp serve --method tools/list`
-      (advisory `type: [x, null]` portability warnings are expected from
-      zod-to-json-schema and are accepted; 0 errors is the gate).
+      (review any portability warnings; 0 errors is the gate).
 
 ## 3. Release candidate
 
+The first publication creates the npm package and its ownership. After the
+local gate and CI pass, publish the existing RC version from the release
+commit using an authenticated npm account:
+
 ```bash
-npm version 0.3.0-rc.1 --no-git-tag-version   # first RC only
-npm publish --tag next --provenance           # via CI for tagged builds
+npm login
+npm publish --access public --tag next
 ```
+
+For subsequent releases, configure an npm trusted publisher for GitHub Actions
+on the package settings page: owner `khurrambhutto`, repository `classmcp`,
+workflow `release.yml`, and environment `npm`. Allow `npm publish`. The
+workflow publishes prerelease tags to `next` with provenance. Do not push a
+tag for a version that was already published manually: the workflow would try
+to publish the same immutable version again.
 
 - [ ] Install the registry package (`npm install --global gcrclassmcp@next`) on
       a clean machine, not from the repository.
@@ -62,10 +74,13 @@ npm publish --tag next --provenance           # via CI for tagged builds
 
 ## 4. Stable release
 
-- [ ] Promote the validated RC to `0.3.0` (`npm version 0.3.0`).
-- [ ] Repeat the full local gate and CI on the tagged commit.
-- [ ] `npm publish --access public --provenance` via CI.
-- [ ] Push tag `v0.3.0`; create GitHub release notes from CHANGELOG.
+- [ ] Set the stable version with `npm version 0.3.0 --no-git-tag-version`
+      and date its CHANGELOG entry.
+- [ ] Commit the changes, push the release branch, and repeat the full local
+      gate and CI on that commit.
+- [ ] Tag the validated commit and push `v0.3.0`. The release workflow
+      publishes it to npm with provenance.
+- [ ] Create GitHub release notes from CHANGELOG.
 - [ ] Install `gcrclassmcp@0.3.0` from the public registry into a clean
       environment and repeat the smoke test.
 - [ ] Verify provenance on the npm package page.

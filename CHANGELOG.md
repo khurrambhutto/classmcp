@@ -10,6 +10,8 @@ Release candidate for the first public npm release (`gcrclassmcp`, command
 
 ### Security
 
+- Updated the MCP SDK and Zod, refreshed transitive dependencies, and upgraded
+  Vitest to address npm audit advisories while retaining Node 20 support.
 - **Path confinement is now canonical.** Allowed roots and targets are resolved
   with `realpath`; symlinks that escape a root are rejected for both uploads and
   downloads, including symlinked parents of not-yet-existing files.

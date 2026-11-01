@@ -54,10 +54,10 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.17.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "googleapis": "^155.0.0",
     "open": "^10.1.0",
-    "zod": "^3.25.0"
+    "zod": "^4.6.7"
   },
   "optionalDependencies": {
     "keytar": "^7.9.0"
@@ -66,6 +66,6 @@
     "@types/node": "^22.0.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
-    "vitest": "^3.2.0"
+    "vitest": "^4.1.12"
   }
 }
