@@ -65,7 +65,10 @@ export async function saveTokens(tokens: object): Promise<void> {
     } catch { /* fall back to the permission-restricted file */ }
   }
   await writeSecret(TOKEN_FILE, value);
-  process.stderr.write("Warning: OS credential storage is unavailable; tokens are stored in ~/.classmcp/tokens.json (mode 0600).\n");
+  const protection = process.platform === "win32"
+    ? "Windows file access depends on the folder's access-control settings"
+    : "mode 0600";
+  process.stderr.write(`Warning: OS credential storage is unavailable; tokens are stored in ${TOKEN_FILE} (${protection}).\n`);
 }
 
 export async function loadTokens(): Promise<Record<string, unknown> | undefined> {
@@ -117,6 +120,8 @@ export async function tokenStorage(): Promise<"keychain" | "file" | "none"> {
 
 /** Repair permissions on pre-existing secret files (created before mode hardening). */
 export async function repairSecretPermissions(): Promise<string[]> {
+  // Windows uses ACLs; chmod cannot restrict access to the current user.
+  if (process.platform === "win32") return [];
   const repaired: string[] = [];
   for (const file of [CREDENTIALS_FILE, TOKEN_FILE]) {
     try {

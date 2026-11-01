@@ -157,7 +157,9 @@ async function doctor(): Promise<void> {
   try {
     const stat = await fs.stat(CREDENTIALS_FILE);
     credentialsFound = true;
-    if ((stat.mode & 0o077) === 0) ok("OAuth credentials file permissions");
+    if (process.platform === "win32") {
+      warn("OAuth credentials file permissions", "Windows access depends on folder ACLs; verify that only trusted accounts have access");
+    } else if ((stat.mode & 0o077) === 0) ok("OAuth credentials file permissions");
     else {
       const repaired = await repairSecretPermissions();
       warn("OAuth credentials file permissions were too open", `repaired: ${repaired.includes(CREDENTIALS_FILE) ? "yes" : "no"}`);

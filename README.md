@@ -5,7 +5,7 @@ search, handout downloads, and best-effort submissions for coding agents.
 
 - Runs on your machine, one Google account per install, no hosted service, no telemetry.
 - Uses your own Google OAuth **Desktop app** client; tokens stay in the OS keychain
-  (or a `0600` file where no keychain exists).
+  (or a local file where no keychain exists).
 - Package: [`gcrclassmcp`](https://www.npmjs.com/package/gcrclassmcp) on npm. The command is `classmcp`.
 
 ## Quick start
@@ -42,7 +42,7 @@ Do these steps yourself:
 4. Fix what doctor reports when the fix is local:
    - Credentials missing: continue at step 8.
    - Token corrupt, expired, or missing scopes: run "classmcp setup" and continue at step 9.
-   - Keychain unavailable: confirm doctor says token storage is "file", and that ~/.classmcp/tokens.json has mode 0600. If not, run "classmcp setup" again.
+   - Keychain unavailable: confirm doctor says token storage is "file". On macOS or Linux, confirm ~/.classmcp/tokens.json has mode 0600. On Windows, check that the config folder's access-control list permits only trusted accounts.
 5. Register the server with the host you are running in. Use the host CLI when you know its exact syntax, otherwise edit the config file. Preserve every existing entry and comment. Per-host shapes are documented at https://github.com/khurrambhutto/classmcp#hosts; the common ones are:
    - Codex: codex mcp add classmcp -- classmcp serve
    - Claude Code: claude mcp add classmcp -- classmcp serve
@@ -148,8 +148,11 @@ confused with "could not read the rubric".
   and delete partial files on failure.
 - **Resource limits.** Downloads are capped at 250 MB per file and 500 MB per
   call, enforced while streaming.
-- **Permissions.** `~/.classmcp` is `0700`; `credentials.json` and the fallback
-  `tokens.json` are `0600`, repaired on every setup/doctor run.
+- **Permissions.** On macOS and Linux, `~/.classmcp` is `0700` and
+  `credentials.json` and the fallback `tokens.json` are `0600`. Setup and doctor
+  can repair these modes. Windows uses access-control lists instead of Unix
+  modes; files inherit their folder's access controls and classmcp does not
+  verify or repair those ACLs. Restrict the config folder to trusted accounts.
 - **OAuth.** Loopback redirect with a random `state`, a 5-minute timeout, and
   listener cleanup on every path. Desktop-app clients only.
 - **Scopes.** `classroom.courses.readonly`, `classroom.coursework.me`,
@@ -184,9 +187,9 @@ confused with "could not read the rubric".
   The default download directory becomes `<root>/classmcp`, where `<root>` is
   `$CLASSMCP_WORKDIR` when set, else `~/Downloads`.
 - `CLASSMCP_CONFIG_DIR` — overrides `~/.classmcp` (tests, multi-account setups).
-- `~/.classmcp/credentials.json` — OAuth Desktop client JSON (mode 0600).
+- `~/.classmcp/credentials.json` — OAuth Desktop client JSON (mode 0600 on macOS and Linux).
 - Tokens — OS keychain via keytar (service `classmcp`, account `oauth-tokens`);
-  fallback `~/.classmcp/tokens.json` (mode 0600).
+  fallback `~/.classmcp/tokens.json` (mode 0600 on macOS and Linux; inherited ACLs on Windows).
 
 ## Hosts
 

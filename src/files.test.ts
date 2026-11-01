@@ -73,7 +73,7 @@ describe("assertInsideRoots", () => {
     const real = path.join(root, "real");
     await fs.mkdir(real);
     await fs.symlink(real, path.join(root, "link"));
-    await expect(assertInsideRoots(path.join(root, "link", "f.txt"), [root])).resolves.toBe(path.join(real, "f.txt"));
+    await expect(assertInsideRoots(path.join(root, "link", "f.txt"), [root])).resolves.toBe(path.join(await fs.realpath(real), "f.txt"));
   });
 });
 

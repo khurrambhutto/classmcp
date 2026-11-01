@@ -32,19 +32,26 @@ beforeEach(async () => {
 });
 
 describe("credential storage", () => {
-  it("round-trips credentials and enforces 0600/0700 permissions", async () => {
+  it("round-trips credentials and enforces Unix permissions where supported", async () => {
     await store.saveCredentials('{"installed":{"client_id":"a","client_secret":"b"}}');
     await expect(store.loadCredentials()).resolves.toContain("client_id");
-    expect((await mode(CREDENTIALS_FILE)).toString(8)).toBe("600");
-    expect((await mode(configDir)).toString(8)).toBe("700");
+    if (process.platform !== "win32") {
+      expect((await mode(CREDENTIALS_FILE)).toString(8)).toBe("600");
+      expect((await mode(configDir)).toString(8)).toBe("700");
+    }
   });
 
-  it("repairs permissions on an existing secret file", async () => {
+  it.skipIf(process.platform === "win32")("repairs permissions on an existing secret file", async () => {
     await fs.writeFile(CREDENTIALS_FILE, "{}", { mode: 0o644 });
     await fs.chmod(CREDENTIALS_FILE, 0o644);
     const repaired = await store.repairSecretPermissions();
     expect(repaired).toContain(CREDENTIALS_FILE);
     expect((await mode(CREDENTIALS_FILE)).toString(8)).toBe("600");
+  });
+
+  it.skipIf(process.platform !== "win32")("does not claim to repair Windows ACLs", async () => {
+    await store.saveCredentials("{}");
+    await expect(store.repairSecretPermissions()).resolves.toEqual([]);
   });
 
   it("reports a missing credentials file with setup guidance", async () => {
@@ -65,10 +72,10 @@ describe("token storage", () => {
     await expect(store.tokenStorage()).resolves.toBe("keychain");
   });
 
-  it("falls back to a 0600 token file when the keychain write fails", async () => {
+  it("falls back to a token file when the keychain write fails", async () => {
     keytar.setPassword.mockRejectedValueOnce(new Error("keyring unavailable"));
     await store.saveTokens(tokens);
-    expect((await mode(tokenFile)).toString(8)).toBe("600");
+    if (process.platform !== "win32") expect((await mode(tokenFile)).toString(8)).toBe("600");
     await expect(store.loadTokens()).resolves.toMatchObject({ refresh_token: "rt" });
 
     keytar.getPassword.mockResolvedValueOnce(null);

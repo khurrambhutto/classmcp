@@ -23,8 +23,8 @@ Release candidate for the first public npm release (`gcrclassmcp`, command
   loopback port, verifies a random `state`, handles denial/error callbacks, has
   a 5-minute timeout, and closes on every path. Desktop-app credentials only;
   Web clients are rejected with guidance.
-- Credentials and tokens are written atomically and forced to `0600`, the
-  config directory to `0700`, repaired on existing installs. Corrupt token
+- Credentials and tokens are written atomically; on macOS and Linux, files are
+  forced to `0600` and the config directory to `0700`, repaired on existing installs. Corrupt token
   stores are reported instead of silently re-authorizing.
 - Added `classroom.topics.readonly` and scope-drift detection during setup.
 - `submit_work` no longer turns in work after a failed upload or attachment
@@ -33,6 +33,8 @@ Release candidate for the first public npm release (`gcrclassmcp`, command
 
 ### Fixed
 
+- Corrected canonical-path test expectations on macOS and Windows, and avoid
+  treating Windows mode bits as Unix permissions or claiming ACLs were repaired.
 - **Pagination (breaking for consumers that assumed first-page-only data).**
   Courses, coursework, submissions, materials, announcements, and topics are
   scanned to exhaustion with explicit `scanTruncated` metadata; search no
@@ -64,7 +66,7 @@ Release candidate for the first public npm release (`gcrclassmcp`, command
   the executable remains `classmcp`. Setup never persists transient `npx`
   cache paths.
 - `keytar` moved to optional dependencies; missing keychains fall back to a
-  `0600` token file.
+  local token file (`0600` on macOS and Linux).
 - `download_files` annotation is `idempotentHint: false` (collision policy
   creates new files); read tools are marked `openWorldHint: true`.
 

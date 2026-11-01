@@ -37,6 +37,8 @@ npm run pack:verify           # tarball install + MCP stdio smoke test
       absolute development paths (pack:verify checks the file list and scans
       text content for secret shapes).
 - [ ] No secret values appear in tool output, errors, or logs.
+- [ ] On Windows, inspect the config directory's inherited ACLs; Unix mode
+      checks do not prove which Windows accounts can read the files.
 - [ ] MCP Inspector reports 0 schema errors:
       `npx @modelcontextprotocol/inspector --cli classmcp serve --method tools/list`
       (review any portability warnings; 0 errors is the gate).
