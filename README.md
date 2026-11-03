@@ -13,8 +13,15 @@ Node.js 20 or newer and a Google account with access to Classroom.
 
 ## Install
 
-The package has not yet been published to npm. Until it is published, clone the
-repository and install from the project directory:
+Install the release candidate from npm:
+
+```bash
+npm install --global gcrclassmcp@next
+classmcp --version
+```
+
+To install from source, clone the repository and install from the project
+directory:
 
 ```bash
 git clone https://github.com/khurrambhutto/classmcp.git
@@ -24,14 +31,8 @@ npm install --global .
 classmcp --version
 ```
 
-After publication, install or update the stable package with:
-
-```bash
-npm install --global gcrclassmcp
-```
-
-For a published release candidate, use `npm install --global gcrclassmcp@next`.
-See [RELEASE.md](RELEASE.md) for the publication process.
+The `next` tag selects the release candidate. See [RELEASE.md](RELEASE.md) for
+the publication process.
 
 ## Connect Google Classroom
 

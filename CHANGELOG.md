@@ -3,7 +3,7 @@
 All notable changes to this project are documented here. The format loosely
 follows [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
-## [0.3.0-rc.1] — unreleased
+## [0.3.0-rc.1] — 2026-11-03
 
 Release candidate for the first public npm release (`gcrclassmcp`, command
 `classmcp`). Breaking changes are marked.
