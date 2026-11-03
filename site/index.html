@@ -1,0 +1,760 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f4f5f0" />
+    <meta
+      name="description"
+      content="classmcp connects Google Classroom to the coding agent you already use. Ask for the week ahead, find the assignment, download the handout. Local, open source, on npm."
+    />
+    <meta property="og:title" content="classmcp — Google Classroom, inside your agent" />
+    <meta
+      property="og:description"
+      content="A local MCP server that gives Codex, OpenCode, Claude Code, and Cursor direct access to your Google Classroom. Five tools, no backend, no telemetry."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://khurrambhutto.github.io/classmcp/" />
+    <link rel="canonical" href="https://khurrambhutto.github.io/classmcp/" />
+    <meta name="color-scheme" content="light" />
+    <title>classmcp — Google Classroom, inside your agent</title>
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link
+      rel="preload"
+      href="./assets/archivo-latin.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <link
+      rel="preload"
+      href="./assets/figtree-latin.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="./app.js" defer></script>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "classmcp",
+        "alternateName": "gcrclassmcp",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "macOS, Linux, Windows",
+        "softwareVersion": "0.3.0-rc.1",
+        "license": "https://opensource.org/licenses/MIT",
+        "url": "https://khurrambhutto.github.io/classmcp/",
+        "description": "A local Model Context Protocol server that connects coding agents to Google Classroom: overview, assignment detail, search, file downloads, and best-effort submissions.",
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+      }
+    </script>
+  </head>
+  <body>
+    <svg class="sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <symbol id="i-arrow" viewBox="0 0 24 24">
+        <path d="M4 12h15m-6-7 7 7-7 7" />
+      </symbol>
+      <symbol id="i-external" viewBox="0 0 24 24">
+        <path d="M14 4h6v6m0-6L9 15M11 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-6" />
+      </symbol>
+      <symbol id="i-copy" viewBox="0 0 24 24">
+        <rect x="9" y="9" width="12" height="12" rx="2.5" />
+        <path d="M15 9V5.5A1.5 1.5 0 0 0 13.5 4h-9A1.5 1.5 0 0 0 3 5.5v9A1.5 1.5 0 0 0 4.5 16H9" />
+      </symbol>
+      <symbol id="i-check" viewBox="0 0 24 24">
+        <path d="m4.5 12.5 5 5L19.5 6" />
+      </symbol>
+      <symbol id="i-chevron" viewBox="0 0 24 24">
+        <path d="m6 9 6 6 6-6" />
+      </symbol>
+      <symbol id="i-github" viewBox="0 0 24 24">
+        <path
+          fill="currentColor"
+          stroke="none"
+          d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2 0 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 0-.8.4-1.3.8-1.6-2.7-.3-5.5-1.3-5.5-5.9 0-1.3.5-2.4 1.2-3.2-.1-.3-.5-1.5.1-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0c2.3-1.5 3.3-1.2 3.3-1.2.6 1.7.2 2.9.1 3.2.8.8 1.2 1.9 1.2 3.2 0 4.6-2.8 5.6-5.5 5.9.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .3Z"
+        />
+      </symbol>
+      <symbol id="i-calendar" viewBox="0 0 24 24">
+        <rect x="3" y="5" width="18" height="16" rx="3" />
+        <path d="M8 3v4m8-4v4M3 10.5h18m-13 5h4m3 0h4" />
+      </symbol>
+      <symbol id="i-search" viewBox="0 0 24 24">
+        <circle cx="10.5" cy="10.5" r="6.5" />
+        <path d="m15.5 15.5 5 5" />
+      </symbol>
+      <symbol id="i-file" viewBox="0 0 24 24">
+        <path d="M14 3H6.5A1.5 1.5 0 0 0 5 4.5v15A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5V8l-5-5Zm0 0v5h5M8.5 13h7m-7 4h4.5" />
+      </symbol>
+      <symbol id="i-download" viewBox="0 0 24 24">
+        <path d="M12 3v12m-5-5.5 5 5.5 5-5.5M4 17v2.5A1.5 1.5 0 0 0 5.5 21h13a1.5 1.5 0 0 0 1.5-1.5V17" />
+      </symbol>
+      <symbol id="i-lock" viewBox="0 0 24 24">
+        <rect x="4.5" y="10" width="15" height="10.5" rx="3" />
+        <path d="M8 10V7a4 4 0 0 1 8 0v3m-4 5v2.5" />
+      </symbol>
+      <symbol id="i-spark" viewBox="0 0 24 24">
+        <path d="m12 3 2.6 6.4L21 12l-6.4 2.6L12 21l-2.6-6.4L3 12l6.4-2.6L12 3Z" />
+      </symbol>
+      <symbol id="i-brand" viewBox="0 0 32 32">
+        <rect x="1" y="1" width="30" height="30" rx="8" fill="currentColor" />
+        <path
+          d="M11.7 10.7 16.4 15.5 11.7 20.3"
+          fill="none"
+          stroke="#fff"
+          stroke-width="2.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
+        <path
+          d="M17.9 20.5h4.8"
+          fill="none"
+          stroke="#fff"
+          stroke-width="2.5"
+          stroke-linecap="round"
+        />
+      </symbol>
+    </svg>
+
+    <a class="skip" href="#main">Skip to content</a>
+
+    <header class="site-header" id="site-header">
+      <div class="shell header-inner">
+        <a class="brand" href="#top" aria-label="classmcp, back to top">
+          <svg class="brand-mark" aria-hidden="true"><use href="#i-brand" /></svg>
+          <span>classmcp<span class="brand-dot">.</span></span>
+        </a>
+
+        <nav class="site-nav" aria-label="Main">
+          <a href="#demo">Demo</a>
+          <a href="#tools">Tools</a>
+          <a href="#setup">Setup</a>
+          <a href="#faq">FAQ</a>
+          <a class="nav-repo" href="https://github.com/khurrambhutto/classmcp">
+            <svg class="icon" aria-hidden="true"><use href="#i-github" /></svg>
+            GitHub
+          </a>
+        </nav>
+
+        <div class="header-actions">
+          <a class="button button-primary button-sm" href="#setup">Install</a>
+          <button
+            class="menu-button"
+            id="menu-button"
+            type="button"
+            aria-expanded="false"
+            aria-controls="mobile-nav"
+            aria-label="Open menu"
+          >
+            <span class="menu-bars" aria-hidden="true"><i></i><i></i></span>
+          </button>
+        </div>
+      </div>
+      <div class="mobile-nav" id="mobile-nav" hidden>
+        <a href="#demo">Demo</a>
+        <a href="#tools">Tools</a>
+        <a href="#setup">Setup</a>
+        <a href="#faq">FAQ</a>
+        <a href="https://github.com/khurrambhutto/classmcp">GitHub</a>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="hero" id="top">
+        <div class="shell">
+          <h1 class="hero-title">
+            Google Classroom,
+            <span class="line">inside your agent.</span>
+          </h1>
+
+          <div class="hero-body">
+            <div class="hero-copy">
+              <p class="hero-lede">
+                A local MCP server that puts Google Classroom inside Codex,
+                OpenCode, Claude Code, or Cursor. Ask what’s due, find the
+                handout, pull the files down.
+              </p>
+              <div class="hero-actions">
+                <a class="button button-primary" href="#setup">
+                  Set it up
+                  <svg class="icon" aria-hidden="true"><use href="#i-arrow" /></svg>
+                </a>
+                <a class="button button-quiet" href="#demo">See it work</a>
+              </div>
+            </div>
+
+            <div class="hero-panel">
+              <div class="install-row">
+                <pre tabindex="0"><code id="install-command">npm install -g gcrclassmcp@next</code></pre>
+                <button
+                  class="copy-button"
+                  type="button"
+                  data-copy="install-command"
+                  aria-label="Copy the install command"
+                >
+                  <svg class="icon copy-icon" aria-hidden="true"><use href="#i-copy" /></svg>
+                  <svg class="icon copied-icon" aria-hidden="true"><use href="#i-check" /></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+
+              <div class="hero-panel-actions">
+                <a
+                  class="button button-quiet"
+                  href="https://github.com/khurrambhutto/classmcp"
+                >
+                  <svg class="icon" aria-hidden="true"><use href="#i-github" /></svg>
+                  View on GitHub
+                </a>
+                <button
+                  class="button button-quiet copy-button"
+                  type="button"
+                  data-copy="agent-prompt"
+                >
+                  <svg class="icon copy-icon" aria-hidden="true"><use href="#i-copy" /></svg>
+                  <svg class="icon copied-icon" aria-hidden="true"><use href="#i-check" /></svg>
+                  <span>Copy prompt</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="board-section" id="demo" aria-labelledby="demo-title">
+        <div class="shell">
+          <h2 id="demo-title" class="display">The week,<br />in one reply.</h2>
+
+          <div class="board">
+            <div class="chat">
+              <div class="chat-head">
+                <span class="chat-badge">
+                  <img
+                    src="./assets/logos/google-classroom.svg"
+                    alt=""
+                    width="22"
+                    height="22"
+                    decoding="async"
+                  />
+                </span>
+                <div>
+                  <strong>Google Classroom</strong>
+                  <span><span class="status-dot" aria-hidden="true"></span>example session</span>
+                </div>
+              </div>
+
+              <div class="turn turn-you">
+                <span class="avatar">You</span>
+                <p id="demo-question">What’s due this week?</p>
+              </div>
+
+              <div class="turn turn-agent">
+                <span class="avatar avatar-agent" aria-hidden="true">
+                  <svg class="icon"><use href="#i-spark" /></svg>
+                </span>
+                <div class="answer" id="demo-answer" aria-live="polite" aria-atomic="true">
+                  <p>You have <strong>3 assignments</strong> coming up. Here’s the week:</p>
+                  <div class="assignments">
+                    <div class="assignment">
+                      <span class="subject physics" aria-hidden="true"><svg class="icon"><use href="#i-file" /></svg></span>
+                      <div>
+                        <strong>Waves &amp; sound lab</strong>
+                        <span>Physics</span>
+                      </div>
+                      <span class="due is-soon">Tomorrow</span>
+                    </div>
+                    <div class="assignment">
+                      <span class="subject literature" aria-hidden="true"><svg class="icon"><use href="#i-file" /></svg></span>
+                      <div>
+                        <strong>The art of persuasion</strong>
+                        <span>English literature</span>
+                      </div>
+                      <span class="due">Thursday</span>
+                    </div>
+                    <div class="assignment">
+                      <span class="subject maths" aria-hidden="true"><svg class="icon"><use href="#i-file" /></svg></span>
+                      <div>
+                        <strong>Practice set 04</strong>
+                        <span>Mathematics</span>
+                      </div>
+                      <span class="due">Friday</span>
+                    </div>
+                  </div>
+                  <p class="followup">
+                    Want me to download the lab handout so you can start tonight?
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div class="board-rail">
+              <div class="prompts" role="group" aria-label="Choose an example request">
+                <button class="prompt" type="button" data-demo="week" aria-pressed="true">
+                  <svg class="icon" aria-hidden="true"><use href="#i-calendar" /></svg>
+                  Plan my week
+                </button>
+                <button class="prompt" type="button" data-demo="find" aria-pressed="false">
+                  <svg class="icon" aria-hidden="true"><use href="#i-search" /></svg>
+                  Find an assignment
+                </button>
+                <button class="prompt" type="button" data-demo="download" aria-pressed="false">
+                  <svg class="icon" aria-hidden="true"><use href="#i-download" /></svg>
+                  Get the handouts
+                </button>
+              </div>
+
+              <div class="trace" role="group" aria-label="Tool calls made by classmcp">
+                <div class="trace-head">
+                  <span class="trace-title">classmcp</span>
+                  <span class="trace-mode">stdio</span>
+                </div>
+                <ol class="trace-lines" id="trace-lines">
+                  <li><span class="call">→</span><code>get_overview</code><span class="args">{ view: "courses" }</span></li>
+                  <li><span class="call">←</span><span class="result">4 courses · 96 ms</span></li>
+                  <li><span class="call">→</span><code>get_overview</code><span class="args">{ view: "due", window: 7 }</span></li>
+                  <li><span class="call">←</span><span class="result">3 due · 187 ms</span></li>
+                </ol>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="hosts" aria-label="Supported agents">
+        <div class="shell hosts-inner">
+          <p class="hosts-lead">Works with</p>
+          <div class="host-list">
+            <span class="host">
+              <img class="host-logo" src="./assets/logos/openai.svg" alt="" width="18" height="18" decoding="async" />
+              Codex
+            </span>
+            <span class="host">
+              <img class="host-logo" src="./assets/logos/opencode.svg" alt="" width="18" height="18" decoding="async" />
+              OpenCode
+            </span>
+            <span class="host">
+              <img class="host-logo" src="./assets/logos/claude.svg" alt="" width="18" height="18" decoding="async" />
+              Claude Code
+            </span>
+            <span class="host">
+              <img class="host-logo" src="./assets/logos/cursor.svg" alt="" width="18" height="18" decoding="async" />
+              Cursor
+            </span>
+            <span class="host host-more">any host that speaks MCP over stdio</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="tools" aria-labelledby="tools-title">
+        <div class="shell">
+          <h2 id="tools-title" class="display">Less looking.<br />More doing.</h2>
+
+          <div class="features">
+            <article class="feature">
+              <span class="feature-icon" aria-hidden="true"><svg class="icon"><use href="#i-calendar" /></svg></span>
+              <h3>Know what’s due.</h3>
+              <p>
+                Every open assignment, what’s missing, and the last round of
+                grades — across all your courses, in one call.
+              </p>
+              <p class="feature-example">“What should I start tonight?”</p>
+            </article>
+
+            <article class="feature">
+              <span class="feature-icon" aria-hidden="true"><svg class="icon"><use href="#i-search" /></svg></span>
+              <h3>Find the real assignment.</h3>
+              <p>
+                Coursework, materials, and announcements. The prompt, the rubric,
+                and the attachments.
+              </p>
+              <p class="feature-example">“Find the photosynthesis lab.”</p>
+            </article>
+
+            <article class="feature">
+              <span class="feature-icon" aria-hidden="true"><svg class="icon"><use href="#i-download" /></svg></span>
+              <h3>Pull the files down.</h3>
+              <p>
+                Handouts saved to your machine. Docs, Sheets, and Slides exported
+                into formats you can edit.
+              </p>
+              <p class="feature-example">“Download the Physics handouts.”</p>
+            </article>
+          </div>
+
+          <div class="tool-table" aria-label="The five classmcp tools">
+            <div class="tool-row">
+              <code>get_overview</code>
+              <p>Courses, deadlines, missing work, and grades in a single call.</p>
+            </div>
+            <div class="tool-row">
+              <code>get_assignment</code>
+              <p>Full instructions, rubric, and attachment list for one assignment.</p>
+            </div>
+            <div class="tool-row">
+              <code>search</code>
+              <p>Coursework, materials, and announcements across every course.</p>
+            </div>
+            <div class="tool-row">
+              <code>download_files</code>
+              <p>Save attachments to disk; export Google Docs, Sheets, and Slides.</p>
+            </div>
+            <div class="tool-row">
+              <code>submit_work</code>
+              <p>Upload to Drive and attempt to attach and turn in. Best effort.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section setup" id="setup" aria-labelledby="setup-title">
+        <div class="shell">
+          <h2 id="setup-title" class="display">From install<br />to first answer.</h2>
+
+          <div class="agent-first">
+            <div class="agent-first-copy">
+              <h3>Let your agent do the setup.</h3>
+              <button class="button button-primary copy-button" type="button" data-copy="agent-prompt">
+                <svg class="icon copy-icon" aria-hidden="true"><use href="#i-copy" /></svg>
+                <svg class="icon copied-icon" aria-hidden="true"><use href="#i-check" /></svg>
+                <span>Copy setup prompt</span>
+              </button>
+            </div>
+            <pre id="agent-prompt" tabindex="0" aria-label="Agent setup prompt">Set up the classmcp MCP server for me end to end. The npm package is gcrclassmcp and the command is classmcp. Read https://github.com/khurrambhutto/classmcp first.
+
+1. Check the environment
+   - Node.js 20 or newer. If it is missing or older, stop and tell me what to install.
+   - Check whether classmcp is already installed before installing it again.
+
+2. Install
+   - Run npm install --global gcrclassmcp@next, then classmcp --version.
+
+3. Connect Google
+   - Guide me through creating a Google Cloud project, enabling the Classroom and Drive APIs, configuring the OAuth consent screen, and downloading Desktop app credentials. I complete the browser steps. Never ask me for credentials in chat.
+   - Run classmcp setup interactively and let me approve Google's consent page myself.
+   - Run classmcp doctor and explain any failure without printing secrets.
+
+4. Register the server
+   - Identify my MCP host: Codex, OpenCode, Claude Code, Cursor, or another stdio host. If you are unsure, ask me.
+   - Register classmcp with the README instructions for that host. Merge into the existing config and keep the other servers and comments.
+   - Use the global executable or a stable absolute path, never an npx cache path.
+
+5. Tell me what to do next
+   - Tell me to restart my host so the server loads.
+   - Confirm these five tools are listed: get_overview, get_assignment, search, download_files, submit_work.
+   - Give me this first request: "What's due this week in my Google Classroom courses?"
+   - Tell me that submissions are best effort, and that Google may require me to finish a turn-in in Classroom.
+
+Do not skip a verification step. If something fails, stop and tell me exactly what failed and how to fix it.</pre>
+          </div>
+
+          <h3 class="manual-title">Or do it yourself</h3>
+
+          <div class="steps">
+            <article class="step">
+              <span class="step-number" aria-hidden="true">1</span>
+              <div class="step-body">
+                <h3>Install the package</h3>
+                <p>
+                  The package is <code>gcrclassmcp</code>; the command is
+                  <code>classmcp</code>. Node.js 20 or newer.
+                </p>
+                <div class="code">
+                  <div class="code-bar">
+                    <button class="copy-button" type="button" data-copy="install-steps" aria-label="Copy installation commands">
+                      <svg class="icon copy-icon" aria-hidden="true"><use href="#i-copy" /></svg>
+                      <svg class="icon copied-icon" aria-hidden="true"><use href="#i-check" /></svg>
+                      <span>Copy</span>
+                    </button>
+                  </div>
+                  <pre tabindex="0"><code id="install-steps">npm install -g gcrclassmcp@next
+classmcp --version</code></pre>
+                </div>
+              </div>
+            </article>
+
+            <article class="step">
+              <span class="step-number" aria-hidden="true">2</span>
+              <div class="step-body">
+                <h3>Connect Google</h3>
+                <p>
+                  Create a Desktop OAuth client, then let setup walk you through
+                  the sign-in.
+                </p>
+
+                <details class="details">
+                  <summary>
+                    Google Cloud, step by step
+                    <svg class="icon" aria-hidden="true"><use href="#i-chevron" /></svg>
+                  </summary>
+                  <ol class="checklist">
+                    <li>
+                      Open <a href="https://console.cloud.google.com/">Google Cloud Console</a>
+                      and create a project.
+                    </li>
+                    <li>
+                      Enable the <strong>Google Classroom API</strong> and the
+                      <strong>Google Drive API</strong>.
+                    </li>
+                    <li>
+                      Configure the OAuth consent screen. For a personal account,
+                      choose External; while the app is in Testing, add yourself
+                      as a test user.
+                    </li>
+                    <li>
+                      Create an OAuth client ID with application type
+                      <strong>Desktop app</strong>.
+                    </li>
+                    <li>
+                      Download the JSON to your Downloads folder. Setup finds
+                      <code>client_secret*.json</code> there.
+                    </li>
+                  </ol>
+                </details>
+
+                <div class="code">
+                  <div class="code-bar">
+                    <button class="copy-button" type="button" data-copy="setup-steps" aria-label="Copy the Google connection commands">
+                      <svg class="icon copy-icon" aria-hidden="true"><use href="#i-copy" /></svg>
+                      <svg class="icon copied-icon" aria-hidden="true"><use href="#i-check" /></svg>
+                      <span>Copy</span>
+                    </button>
+                  </div>
+                  <pre tabindex="0"><code id="setup-steps">classmcp setup
+classmcp doctor</code></pre>
+                </div>
+              </div>
+            </article>
+
+            <article class="step" id="host-setup">
+              <span class="step-number" aria-hidden="true">3</span>
+              <div class="step-body">
+                <h3>Register it with your agent</h3>
+
+                <div class="host-tabs" role="tablist" aria-label="Choose your agent">
+                  <button id="tab-codex" role="tab" aria-selected="true" aria-controls="host-panel" tabindex="0" data-host="codex">Codex</button>
+                  <button id="tab-opencode" role="tab" aria-selected="false" aria-controls="host-panel" tabindex="-1" data-host="opencode">OpenCode</button>
+                  <button id="tab-claude" role="tab" aria-selected="false" aria-controls="host-panel" tabindex="-1" data-host="claude">Claude Code</button>
+                  <button id="tab-cursor" role="tab" aria-selected="false" aria-controls="host-panel" tabindex="-1" data-host="cursor">Cursor</button>
+                  <button id="tab-other" role="tab" aria-selected="false" aria-controls="host-panel" tabindex="-1" data-host="other">Other</button>
+                </div>
+
+                <div id="host-panel" role="tabpanel" aria-labelledby="tab-codex" tabindex="0" class="host-panel">
+                  <p class="host-instruction" id="host-instruction">Run in your terminal:</p>
+                  <div class="code">
+                    <div class="code-bar">
+                      <span id="host-code-label">Terminal</span>
+                      <button class="copy-button" type="button" data-copy="host-command" aria-label="Copy the agent configuration">
+                        <svg class="icon copy-icon" aria-hidden="true"><use href="#i-copy" /></svg>
+                        <svg class="icon copied-icon" aria-hidden="true"><use href="#i-check" /></svg>
+                        <span>Copy</span>
+                      </button>
+                    </div>
+                    <pre tabindex="0"><code id="host-command">codex mcp add classmcp -- classmcp serve
+codex mcp list</code></pre>
+                  </div>
+                  <p class="step-note" id="host-hint">
+                    Restart or reconnect Codex after registering the server.
+                  </p>
+                </div>
+
+                <noscript>
+                  <p class="step-note">
+                    JavaScript switches the host tabs. Every configuration lives
+                    in the
+                    <a href="https://github.com/khurrambhutto/classmcp#connect-an-agent">host setup documentation</a>.
+                  </p>
+                </noscript>
+              </div>
+            </article>
+          </div>
+
+          <div class="first-run">
+            <span class="first-run-mark" aria-hidden="true"><svg class="icon"><use href="#i-check" /></svg></span>
+            <div>
+              <h3>First request</h3>
+              <p>
+                Ask your agent to list your courses. A
+                <code>get_overview</code> call with
+                <code>view: "courses"</code> means you’re connected. An empty
+                list is still a working connection.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section limits" aria-labelledby="limits-title">
+        <div class="shell limits-inner">
+          <div class="pen-mark" aria-hidden="true">!</div>
+          <div>
+            <h2 id="limits-title">One honest limit.</h2>
+            <p>
+              Google only lets the app that created an assignment attach files or
+              turn work in. For teacher-created coursework, classmcp can upload
+              your file to Drive but can’t push it into the assignment. You get a
+              link and finish the turn-in in Classroom.
+            </p>
+          </div>
+          <a class="text-link" href="https://github.com/khurrambhutto/classmcp#submission-limits">
+            Read the details
+            <svg class="icon" aria-hidden="true"><use href="#i-arrow" /></svg>
+          </a>
+        </div>
+      </section>
+
+      <section class="section private" aria-labelledby="private-title">
+        <div class="shell">
+          <h2 id="private-title" class="display">Your machine.<br />Your tokens.</h2>
+
+          <div class="private-grid">
+            <article>
+              <h3>No hosted service</h3>
+              <p>Nothing to sign up for. The npm package is the whole product.</p>
+            </article>
+            <article>
+              <h3>No telemetry</h3>
+              <p>No analytics, no usage pings.</p>
+            </article>
+            <article>
+              <h3>Contained writes</h3>
+              <p>
+                Downloads stay inside the folders you allow and never overwrite an
+                existing file.
+              </p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section faq" id="faq" aria-labelledby="faq-title">
+        <div class="shell faq-inner">
+          <div class="faq-intro">
+            <h2 id="faq-title" class="display">Before you<br />jump in.</h2>
+            <a class="text-link" href="https://github.com/khurrambhutto/classmcp#readme">
+              Read the full docs
+              <svg class="icon" aria-hidden="true"><use href="#i-arrow" /></svg>
+            </a>
+          </div>
+
+          <div class="faq-list">
+            <details class="details">
+              <summary>
+                What exactly is classmcp?
+                <svg class="icon" aria-hidden="true"><use href="#i-chevron" /></svg>
+              </summary>
+              <p>
+                A local Model Context Protocol server that connects a coding agent
+                to your Google Classroom account. It exposes five tools: overview,
+                assignment detail, search, file downloads, and best-effort
+                submissions.
+              </p>
+            </details>
+
+            <details class="details">
+              <summary>
+                Which agents can I use?
+                <svg class="icon" aria-hidden="true"><use href="#i-chevron" /></svg>
+              </summary>
+              <p>
+                Any host that supports local MCP servers over stdio. Setup examples
+                cover Codex, OpenCode, Claude Code, Cursor, and Antigravity. Codex
+                and OpenCode registration were checked live for this release
+                candidate; the other examples have not all been validated.
+              </p>
+            </details>
+
+            <details class="details">
+              <summary>
+                Do I need my own Google Cloud project?
+                <svg class="icon" aria-hidden="true"><use href="#i-chevron" /></svg>
+              </summary>
+              <p>
+                Yes. Create a project, enable the Classroom and Drive APIs, and
+                download Desktop app credentials. The steps above cover it. Your
+                school’s Workspace policies can still restrict what a third-party
+                app may access.
+              </p>
+            </details>
+
+            <details class="details">
+              <summary>
+                Can my agent turn in my assignments?
+                <svg class="icon" aria-hidden="true"><use href="#i-chevron" /></svg>
+              </summary>
+              <p>
+                Best effort, and only with your explicit confirmation. Google
+                blocks attaching and turning in work on coursework created by
+                another project, which covers most teacher-created assignments.
+                You get a Classroom link to finish.
+              </p>
+            </details>
+
+            <details class="details">
+              <summary>
+                Is it free?
+                <svg class="icon" aria-hidden="true"><use href="#i-chevron" /></svg>
+              </summary>
+              <p>
+                classmcp is MIT licensed, with no subscription and no hosted tier.
+                Your agent may have its own costs. The current npm release is
+                0.3.0-rc.1.
+              </p>
+            </details>
+
+            <details class="details">
+              <summary>
+                Something didn’t connect. Where do I start?
+                <svg class="icon" aria-hidden="true"><use href="#i-chevron" /></svg>
+              </summary>
+              <p>
+                Run <code>classmcp doctor</code>: it checks credentials, token
+                storage, API connectivity, and host configuration. Run
+                <code>classmcp setup</code> again if you need to re-authorize, or
+                see the
+                <a href="https://github.com/khurrambhutto/classmcp#troubleshooting">troubleshooting guide</a>.
+              </p>
+            </details>
+          </div>
+        </div>
+      </section>
+
+      <section class="closing" aria-labelledby="closing-title">
+        <div class="shell closing-inner">
+          <h2 id="closing-title" class="display">Stop checking<br />Classroom.</h2>
+          <div class="closing-buttons">
+            <button class="button button-chalk copy-button" type="button" data-copy="install-command">
+              <svg class="icon copy-icon" aria-hidden="true"><use href="#i-copy" /></svg>
+              <svg class="icon copied-icon" aria-hidden="true"><use href="#i-check" /></svg>
+              <span>Copy install command</span>
+            </button>
+            <a class="button button-outline" href="https://github.com/khurrambhutto/classmcp">
+              View on GitHub
+              <svg class="icon" aria-hidden="true"><use href="#i-external" /></svg>
+            </a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="shell footer-inner">
+        <div class="footer-brand">
+          <a class="brand" href="#top">
+            <svg class="brand-mark" aria-hidden="true"><use href="#i-brand" /></svg>
+            <span>classmcp<span class="brand-dot">.</span></span>
+          </a>
+        </div>
+        <nav class="footer-links" aria-label="Footer">
+          <a href="https://github.com/khurrambhutto/classmcp">GitHub</a>
+          <a href="https://www.npmjs.com/package/gcrclassmcp">npm</a>
+          <a href="https://github.com/khurrambhutto/classmcp#readme">Docs</a>
+          <a href="https://github.com/khurrambhutto/classmcp/issues">Get help</a>
+        </nav>
+        <p class="footer-note">MIT licensed. Not affiliated with Google.</p>
+      </div>
+    </footer>
+
+    <div class="toast" id="copy-status" role="status" aria-live="polite"></div>
+  </body>
+</html>
