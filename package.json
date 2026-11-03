@@ -41,6 +41,7 @@
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "build": "tsc -p tsconfig.build.json",
     "dev": "tsx src/cli.ts",
+    "site:dev": "node scripts/site-serve.mjs",
     "start": "node dist/cli.js serve",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "tsc --noEmit -p tsconfig.json",

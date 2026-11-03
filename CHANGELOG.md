@@ -3,6 +3,15 @@
 All notable changes to this project are documented here. The format loosely
 follows [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [Unreleased]
+
+### Added
+
+- Landing page in `site/` (static HTML/CSS/JS, no build step): interactive
+  agent session with tool-call trace, three-step setup, host configuration
+  tabs, and a copyable agent setup prompt. Not part of the published package.
+- `npm run site:dev` to preview the landing page locally.
+
 ## [0.3.0-rc.1] — 2026-11-03
 
 Release candidate for the first public npm release (`gcrclassmcp`, command

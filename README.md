@@ -321,6 +321,23 @@ npm uninstall --global gcrclassmcp
 Uninstalling the package does not delete your local credentials or tokens.
 Remove the config directory separately if you no longer need those files.
 
+## Landing page
+
+Visit <https://khurrambhutto.github.io/classmcp/>.
+
+Run `npm run site:dev`, then open <http://127.0.0.1:4173>. Set `PORT` to use
+a different port. The site lives in [`site/`](site/) and requires no build
+step. GitHub Pages serves the root of the `gh-pages` branch.
+After committing site changes, deploy them with:
+
+```bash
+git subtree push --prefix=site origin gh-pages
+```
+
+The site serves its font locally and includes its license in `site/assets/`.
+Keep the setup commands, host examples, and agent prompt aligned with this
+README when you change the installation process.
+
 ## Development
 
 ```bash
