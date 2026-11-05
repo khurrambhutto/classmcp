@@ -15,6 +15,10 @@ Call ClassMCP tools inside the `execute` code runtime with bracket notation, e.g
 
 Release process: `RELEASE.md`. Host configs: `README.md`. Changes: `CHANGELOG.md`.
 
+Agent-facing setup docs: `site/llms-full.txt` (and the `site/llms.txt` index).
+When install steps, host configs, tools, or the version change, update them
+with the README; `src/site.test.ts` checks tool names and version.
+
 ## Invariants (do not regress)
 
 - All file paths go through `assertInsideRoots` (canonical `realpath` checks).

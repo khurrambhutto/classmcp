@@ -72,7 +72,10 @@ Google's browser steps yourself when the agent asks.
 
 ```text
 Set up the classmcp MCP server from https://github.com/khurrambhutto/classmcp.
-The package is gcrclassmcp and the command is classmcp. Read its README first.
+The package is gcrclassmcp and the command is classmcp. First read the agent
+setup guide at https://khurrambhutto.github.io/classmcp/llms-full.txt (or this
+README if you cannot fetch URLs). If you are not Codex, OpenCode, or Claude
+Code, read your own host's MCP documentation before registering the server.
 
 1. Check that Node.js is version 20 or newer. If it is not, stop and tell me
    what is missing.
@@ -144,8 +147,12 @@ cannot find the executable, use an absolute Node path and the path to
 ### Claude Code
 
 ```bash
-claude mcp add classmcp -- classmcp serve
+claude mcp add --scope user classmcp -- classmcp serve
+claude mcp list
 ```
+
+`--scope user` registers the server for every project. Without it, Claude Code
+adds the server only for the current directory.
 
 Alternatively, add the following entry under `mcpServers` in `~/.claude.json`:
 
@@ -334,9 +341,14 @@ After committing site changes, deploy them with:
 git subtree push --prefix=site origin gh-pages
 ```
 
-The site serves its font locally and includes its license in `site/assets/`.
-Keep the setup commands, host examples, and agent prompt aligned with this
-README when you change the installation process.
+The site serves its fonts (Geist, Geist Mono) locally with their licenses in
+`site/assets/`. Agent-facing docs live next to it:
+[`site/llms.txt`](site/llms.txt) (index) and
+[`site/llms-full.txt`](site/llms-full.txt) (complete setup and troubleshooting
+for agents). Keep the setup commands, host examples, agent prompt, and both
+text files aligned with this README when you change the installation process.
+`src/site.test.ts` fails if they drift from the registered tools or the
+package version.
 
 ## Development
 
