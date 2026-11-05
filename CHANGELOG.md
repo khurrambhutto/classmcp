@@ -7,10 +7,24 @@ follows [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
 ### Added
 
-- Landing page in `site/` (static HTML/CSS/JS, no build step): interactive
-  agent session with tool-call trace, three-step setup, host configuration
-  tabs, and a copyable agent setup prompt. Not part of the published package.
+- Landing page in `site/` (static HTML/CSS/JS, no build step): replay of
+  real sessions with tool-call traces, a tool explorer, a setup builder that
+  generates commands and config for Codex, OpenCode, Claude Code, Cursor, or
+  another agent (PATH or absolute paths, optional `CLASSMCP_WORKDIR`), a
+  troubleshooter, light and dark themes, and a copyable agent setup prompt.
+  Not part of the published package.
+- `site/llms.txt` and `site/llms-full.txt`: plain-text docs for agents with
+  host-specific setup for Codex, OpenCode, and Claude Code, a rule that other
+  agents read their own MCP docs first, verification, and troubleshooting.
+- `src/site.test.ts` keeps the agent docs in sync with registered tools and
+  the package version.
 - `npm run site:dev` to preview the landing page locally.
+
+### Changed
+
+- Claude Code instructions now use `claude mcp add --scope user` so the server
+  is available in every project.
+- The README agent prompt points to `llms-full.txt`.
 
 ## [0.3.0-rc.1] — 2026-11-03
 
