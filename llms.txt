@@ -1,0 +1,31 @@
+# classmcp
+
+> classmcp is a local, open-source Model Context Protocol (MCP) server that connects coding agents (Codex, OpenCode, Claude Code, Cursor, and any stdio MCP host) to a student's Google Classroom account. It lists due, missing, new, and graded work, reads assignments, searches coursework, downloads Drive attachments, and makes best-effort submissions. It runs on the user's computer with the user's own Google OAuth Desktop credentials. No hosted backend, no telemetry. npm package `gcrclassmcp`, command `classmcp`, Node.js 20+.
+
+Agents setting this up: fetch the complete guide below and follow its "Agent setup procedure". It contains host-specific instructions for Codex, OpenCode, and Claude Code. If you are any other host, you must read your own host's MCP documentation before registering the server.
+
+Quick start:
+
+```
+npm install --global gcrclassmcp@next
+classmcp setup      # interactive: stores Google OAuth Desktop credentials, opens consent
+classmcp doctor     # ok/warn/fail diagnostics, no secrets printed
+classmcp serve      # stdio MCP server, started by the host
+```
+
+## Docs
+
+- [Complete setup, tools, and troubleshooting for agents](https://khurrambhutto.github.io/classmcp/llms-full.txt): self-contained guide; read this to install, authorize, register with a host, verify, and fix problems
+- [README](https://github.com/khurrambhutto/classmcp#readme): human-oriented documentation, source of truth if anything conflicts
+- [Security policy](https://github.com/khurrambhutto/classmcp/blob/master/SECURITY.md): reporting process
+
+## Project
+
+- [Source repository](https://github.com/khurrambhutto/classmcp): TypeScript, MIT license
+- [npm package gcrclassmcp](https://www.npmjs.com/package/gcrclassmcp): current release 0.3.0-rc.1
+- [Issues](https://github.com/khurrambhutto/classmcp/issues): bug reports and help; include `classmcp doctor` output
+- [Changelog](https://github.com/khurrambhutto/classmcp/blob/master/CHANGELOG.md)
+
+## Optional
+
+- [Website](https://khurrambhutto.github.io/classmcp/): landing page with an interactive setup builder
