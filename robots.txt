@@ -1,4 +1,0 @@
-User-agent: *
-Allow: /
-
-Sitemap: https://khurrambhutto.github.io/classmcp/sitemap.xml
